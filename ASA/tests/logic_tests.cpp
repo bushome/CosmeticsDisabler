@@ -43,7 +43,7 @@ static void TestSettings()
 {
 	const Settings d = ParseSettings(Parse("{}"));
 	CHECK(d.probe_items && d.probe_players && d.probe_structure_messages);
-	CHECK(!d.probe_item_entry && !d.strip_items_on_entry);
+	CHECK(!d.probe_item_entry && !d.strip_items_on_entry && !d.probe_unlocked_cosmetics);
 	{
 		Settings on;
 		on.strip_items_on_entry = true;
@@ -91,6 +91,7 @@ static void TestSettings()
 		CHECK(!ShouldStripItemOnLoad(ld, "primalitemskin_cutlass_sword_c", 1234567890));
 	}
 	CHECK(ParseSettings(Parse(R"({"ProbeItemEntry": true})")).probe_item_entry);
+	CHECK(ParseSettings(Parse(R"({"ProbeUnlockedCosmetics": true})")).probe_unlocked_cosmetics);
 	CHECK(!d.probe_structure_channels);
 	CHECK(ParseSettings(Parse(R"({"ProbeStructureChannels": true})")).probe_structure_channels);
 	CHECK(!d.probe_item_requests);
@@ -98,6 +99,12 @@ static void TestSettings()
 	CHECK(!d.probe_client_rpcs);
 	CHECK(!d.unequip_skin_items_for_consoles);
 	CHECK(ParseSettings(Parse(R"({"UnequipSkinItemsForConsoles": true})")).unequip_skin_items_for_consoles);
+	CHECK(d.defer_structure_skins_seconds == 0);
+	CHECK(d.release_structure_skins_per_second == 50);
+	CHECK(ParseSettings(Parse(R"({"ReleaseStructureSkinsPerSecond": 200})")).release_structure_skins_per_second == 200);
+	CHECK(Throws([] { ParseSettings(Parse(R"({"ReleaseStructureSkinsPerSecond": 0})")); }));
+	CHECK(ParseSettings(Parse(R"({"DeferStructureSkins_Seconds": 15})")).defer_structure_skins_seconds == 15);
+	CHECK(Throws([] { ParseSettings(Parse(R"({"DeferStructureSkins_Seconds": 5000})")); }));
 	CHECK(ParseSettings(Parse(R"({"ProbeClientRpcs": true})")).probe_client_rpcs);
 	CHECK(ParseSettings(Parse(R"({"BlockItemSkinsForConsoles": true})")).block_item_skins_for_consoles);
 	CHECK(ParseSettings(Parse(R"({"ProbeItemRequests": true})")).probe_item_requests);

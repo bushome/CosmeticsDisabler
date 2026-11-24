@@ -1,4 +1,4 @@
-// CosmeticsDisabler 0.5 - probe logging, a backed-up structure skin strip, item skin strips, and ways to keep skins away.
+// CosmeticsDisabler 0.5.1 - probe logging, a backed-up structure skin strip, item skin strips, and ways to keep skins away.
 //
 // Observation (reads and logs only):
 //   * UPrimalItem.GetItemNetInfo(bool)           item data built for a client
@@ -76,7 +76,7 @@ namespace
 	const char* const kHookLoadedFromSave = "UPrimalItem.InventoryLoadedFromSaveGame()";
 	const char* const kHookAddNewItem = "UPrimalItem.AddNewItem(TSubclassOf<UPrimalItem>,UPrimalInventoryComponent*,bool,bool,float,bool,int,bool,float,bool,TSubclassOf<UPrimalItem>,float,bool,bool,bool,bool,bool,bool,UWorld*)";
 	const char* const kLevelActorsField = "ULevel.Actors2";
-	constexpr const char* kPluginVersion = "0.5";
+	constexpr const char* kPluginVersion = "0.5.1";
 	const char* const kReplicatedSkinClassField = "APrimalStructure.ReplicatedStructureMySkinClass";
 	const char* const kLocalSkinClassField = "APrimalStructure.StructureSkinClass";
 	// Must match the offsets cache exactly: a name that is not in it makes AsaApi terminate the server (it
@@ -686,10 +686,13 @@ namespace
 		g_next_auto_strip = g_settings.strip_repeat_minutes > 0 ? g_clock + g_settings.strip_repeat_minutes * 60LL : LLONG_MAX;
 	}
 
+	void DeferTick();
+
 	void OnTimer()
 	{
 		++g_clock;
 		g_game_thread = std::this_thread::get_id();
+		DeferTick();
 		FlushItemBackup();
 		MaybeAutoStrip();
 		try
@@ -1385,6 +1388,27 @@ namespace
 	std::unordered_map<UClass*, bool> g_weapon_class_cache;      // actor class -> is a held weapon (AShooterWeapon)
 	UClass* g_weapon_class = nullptr;
 	std::unordered_set<unsigned long long> g_weapon_logged;   // weapon/connection pairs already logged (log once each)
+
+	// EXPERIMENTAL chunked skins for PC connections (DeferStructureSkins_Seconds, ReleaseStructureSkinsPerSecond): every
+	// skinned structure a PC connection receives goes out plain first and is queued for that connection. After the initial
+	// delay the queue is released a few per second: the structure is marked released for that connection and flushed, so
+	// it replicates again and this time carries its skin. Structures are tracked by StructureID (no raw actor pointers).
+	struct DeferState
+	{
+		long long first_clock = 0;     // g_clock when the connection first replicated a skinned structure
+		long long last_clock = 0;      // g_clock of its latest skinned structure replication
+		long long deferred = 0;        // skinned structure sends that went out plain
+		long long released = 0;        // structures released so far
+		long long flush_us = 0;        // time spent flushing for this connection
+		long long max_tick_us = 0;     // longest single tick of flushing
+		long long start_clock = 0;     // g_clock when releasing started (0 = not started)
+		bool reported = false;         // "queue drained" logged
+		std::vector<unsigned int> queue;
+		size_t next = 0;
+		std::unordered_set<unsigned int> queued;
+		std::unordered_set<unsigned int> released_ids;
+	};
+	std::unordered_map<UNetConnection*, DeferState> g_defer;
 	UClass* g_structure_class = nullptr;
 
 	std::ptrdiff_t FieldOffset(void* base, const char* name)
@@ -1487,8 +1511,46 @@ void Hook_AShooterPlayerController_ClientAddActorItem(AShooterPlayerController* 
 	AShooterPlayerController_ClientAddActorItem_original(pc, inventory, info, a, b, c);
 }
 
+// Log-only (ProbeUnlockedCosmetics): once per controller per session, lists the skin items in the player's own inventory
+// when it is first requested, with the game's unlocked-cosmetic flag. Used to find where unlocked skins are kept.
+void ProbeOwnedCosmetics(UPrimalInventoryComponent* inventory, AShooterPlayerController* for_pc)
+{
+	static std::unordered_set<AShooterPlayerController*> seen;
+	if (for_pc == nullptr || inventory == nullptr)
+		return;
+	try
+	{
+		AActor* owner = inventory->OwnerPrivateField();
+		if (owner == nullptr || owner != static_cast<AActor*>(for_pc->GetPlayerCharacter()) || !seen.insert(for_pc).second)
+			return;
+		const std::string eos_id = AsaApi::GetApiUtils().GetEOSIDFromController(for_pc).ToString();
+		TArray<UPrimalItem*, TSizedDefaultAllocator<32>>& items = inventory->InventoryItemsField();
+		int skins = 0, unlocked = 0, mods = 0;
+		for (int i = 0; i < items.Num(); ++i)
+		{
+			UPrimalItem* item = items[i];
+			if (item == nullptr || !(item->bIsItemSkin().Get() || ClassNameOfObject(item).find("PrimalItemSkin") != std::string::npos))
+				continue;
+			++skins;
+			const bool is_unlocked = item->IsUnlockedCosmetic();
+			if (is_unlocked)
+				++unlocked;
+			const __int64 mod_id = item->CustomCosmeticModSkinReplacementIDField();
+			if (mod_id > 0)
+				++mods;
+			Log::GetLog()->info("owned cosmetics: {} item {} unlockedCosmetic={} modId={}", eos_id, ClassNameOfObject(item), is_unlocked ? "yes" : "no", mod_id);
+		}
+		Log::GetLog()->info("owned cosmetics: {} total {} items, {} skin items ({} flagged unlocked, {} mod)", eos_id, items.Num(), skins, unlocked, mods);
+	}
+	catch (...)
+	{
+	}
+}
+
 void Hook_UPrimalInventoryComponent_ServerRequestItems(UPrimalInventoryComponent* inventory, AShooterPlayerController* for_pc, bool equipped, bool first_spawn)
 {
+	if (g_alive && g_settings.probe_unlocked_cosmetics && std::this_thread::get_id() == g_game_thread)
+		ProbeOwnedCosmetics(inventory, for_pc);
 	if (!g_alive || !(g_settings.probe_item_requests || g_settings.block_item_skins_for_consoles || g_settings.unequip_skin_items_for_consoles) || g_request.active
 		|| std::this_thread::get_id() != g_game_thread)
 	{
@@ -1595,7 +1657,8 @@ bool g_add_item_hook = false;
 
 __int64 Hook_UActorChannel_ReplicateActor(UActorChannel* channel)
 {
-	if (!g_alive || !(g_settings.probe_structure_channels || g_settings.block_structure_skins_for_consoles || g_settings.block_item_skins_for_consoles)
+	if (!g_alive || !(g_settings.probe_structure_channels || g_settings.block_structure_skins_for_consoles || g_settings.block_item_skins_for_consoles
+		|| g_settings.defer_structure_skins_seconds > 0)
 		|| channel == nullptr)
 		return UActorChannel_ReplicateActor_original(channel);
 	if (std::this_thread::get_id() != g_game_thread)
@@ -1706,7 +1769,27 @@ __int64 Hook_UActorChannel_ReplicateActor(UActorChannel* channel)
 						info = InfoFor(connection);
 					pair_connection = reinterpret_cast<uintptr_t>(connection);
 					pair_actor = reinterpret_cast<uintptr_t>(actor);
-					if (g_settings.block_structure_skins_for_consoles && EffectiveGroup(info.platform, info.test_console) != PlatformGroup::PC)
+					const bool is_console = EffectiveGroup(info.platform, info.test_console) != PlatformGroup::PC;
+					bool defer = false;
+					if (!is_console && g_settings.defer_structure_skins_seconds > 0 && connection != nullptr)
+					{
+						DeferState& st = g_defer[connection];
+						if (st.first_clock == 0)
+							st.first_clock = g_clock;
+						st.last_clock = g_clock;
+						const unsigned int sid = static_cast<APrimalStructure*>(actor)->StructureIDField();
+						if (st.released_ids.find(sid) == st.released_ids.end())
+						{
+							defer = true;
+							++st.deferred;
+							if (st.queued.insert(sid).second)
+							{
+								st.queue.push_back(sid);
+								st.reported = false;
+							}
+						}
+					}
+					if ((g_settings.block_structure_skins_for_consoles && is_console) || defer)
 					{
 						// Blank the skin fields for this connection only; the other connections replicate the real values.
 						blank_actor = actor;
@@ -1823,11 +1906,81 @@ void Hook_UNetDriver_ProcessRemoteFunctionForChannelPrivate(void* driver, UActor
 		is_server, send_policy, flags);
 }
 
+namespace
+{
+	// Runs every second from OnTimer. For each PC connection past its initial delay, releases up to
+	// ReleaseStructureSkinsPerSecond queued structures: marks them released for that connection and flushes them so they
+	// replicate again with the skin. Other connections are unaffected (not released for them = still plain or blocked).
+	void DeferTick()
+	{
+		if (!g_alive || g_settings.defer_structure_skins_seconds <= 0 || g_defer.empty())
+			return;
+		UWorld* world = AsaApi::GetApiUtils().GetWorld();
+		if (world == nullptr)
+			return;
+		for (auto it = g_defer.begin(); it != g_defer.end();)
+		{
+			DeferState& st = it->second;
+			// Forget a connection with no skinned replication for an hour (disconnected, or its address reused later).
+			if (g_clock - st.last_clock > 3600)
+			{
+				it = g_defer.erase(it);
+				continue;
+			}
+			if (g_clock - st.first_clock >= g_settings.defer_structure_skins_seconds && st.next < st.queue.size())
+			{
+				if (st.start_clock == 0)
+				{
+					st.start_clock = g_clock;
+					Log::GetLog()->info("defer: releasing skins for a PC connection after {} s ({} structures queued, {} per second)",
+						g_settings.defer_structure_skins_seconds, st.queue.size() - st.next, g_settings.release_structure_skins_per_second);
+				}
+				const auto start = std::chrono::steady_clock::now();
+				int budget = g_settings.release_structure_skins_per_second;
+				try
+				{
+					while (budget > 0 && st.next < st.queue.size())
+					{
+						const unsigned int sid = st.queue[st.next++];
+						st.queued.erase(sid);
+						st.released_ids.insert(sid);
+						APrimalStructure* structure = APrimalStructure::GetFromID(world, sid);
+						if (structure == nullptr)
+							continue;   // destroyed since: nothing to send
+						structure->FlushNetDormancy();
+						structure->ForceNetUpdate(false, false, false);
+						++st.released;
+						--budget;
+					}
+				}
+				catch (...)
+				{
+				}
+				const long long us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+				st.flush_us += us;
+				st.max_tick_us = (std::max)(st.max_tick_us, us);
+				if (st.next >= st.queue.size())
+				{
+					st.queue.clear();
+					st.next = 0;
+				}
+			}
+			if (st.start_clock != 0 && st.queue.empty() && !st.reported)
+			{
+				st.reported = true;
+				Log::GetLog()->info("defer: queue drained for a PC connection: {} released over {} s, {} plain sends, flush time {} us total, {} us longest tick",
+					st.released, g_clock - st.start_clock, st.deferred, st.flush_us, st.max_tick_us);
+			}
+			++it;
+		}
+	}
+}
+
 bool g_rpc_hook = false;
 
 void EnsureChannelHook()
 {
-	if (!g_request_hook && (g_settings.probe_item_requests || g_settings.block_item_skins_for_consoles || g_settings.unequip_skin_items_for_consoles))
+	if (!g_request_hook && (g_settings.probe_item_requests || g_settings.block_item_skins_for_consoles || g_settings.unequip_skin_items_for_consoles || g_settings.probe_unlocked_cosmetics))
 	{
 		g_request_hook = AsaApi::GetHooks().SetHook(kHookRequestItems, &Hook_UPrimalInventoryComponent_ServerRequestItems,
 			&UPrimalInventoryComponent_ServerRequestItems_original);
@@ -1839,7 +1992,8 @@ void EnsureChannelHook()
 			&AShooterPlayerController_ClientAddActorItem_original);
 		Log::GetLog()->info("Hook (single item filter): ClientAddActorItem {}", g_add_item_hook ? "ok" : "FAILED");
 	}
-	if (!g_channel_hook && (g_settings.probe_structure_channels || g_settings.block_structure_skins_for_consoles || g_settings.block_item_skins_for_consoles))
+	if (!g_channel_hook && (g_settings.probe_structure_channels || g_settings.block_structure_skins_for_consoles || g_settings.block_item_skins_for_consoles
+		|| g_settings.defer_structure_skins_seconds > 0))
 	{
 		g_channel_hook = AsaApi::GetHooks().SetHook(kHookReplicateActor, &Hook_UActorChannel_ReplicateActor, &UActorChannel_ReplicateActor_original);
 		Log::GetLog()->info("Hook (structure channel probe): ReplicateActor {}", g_channel_hook ? "ok" : "FAILED");
@@ -1954,6 +2108,7 @@ extern "C" __declspec(dllexport) void Plugin_Unload()
 	g_structure_class_cache.clear();
 	g_weapon_class_cache.clear();
 	g_weapon_logged.clear();
+	g_defer.clear();
 	g_weapon_class = nullptr;
 
 	g_seen_characters.clear();

@@ -1,4 +1,4 @@
-# CosmeticsDisabler (ASA) - build 0.5
+# CosmeticsDisabler (ASA) - build 0.5.1
 
 CosmeticsDisabler keeps applied cosmetics (structure skins and item skins, official and mod) from reaching clients,
 which stops the crashes and slow base loading they cause, mostly on consoles. Skins are only ever removed from
@@ -69,11 +69,14 @@ Things to know:
 |---|---|---|
 | `ProbeItems` | `true` | log item data built for clients |
 | `ProbeItemEntry` | `false` | log skinned items entering an inventory and count which game functions fire (changes nothing) |
+| `ProbeUnlockedCosmetics` | `false` | at login, log the skin items in the player's own inventory with the game's unlocked-cosmetic flag, once per player per session (changes nothing) |
 | `ProbePlayers` | `true` | log characters with hair / eyebrow / facial hair cosmetics |
 | `ProbeStructureMessages` | `true` | log structure skin messages |
 | `ProbeStructureChannels` | `false` | count skinned structures replicated to each connection by platform (PC / console / unknown) and the time spent; hooks `UActorChannel::ReplicateActor` (installed when first switched on). Test servers only |
 | `BlockItemSkinsForConsoles` | `false` | blank item skins and mod cosmetic ids in the item data sent to console viewers only: a console player's own items, single items they receive, the gear they see on other characters, and weapons other players hold; PC viewers keep skins; the server item keeps its skin. Hooks `ServerRequestItems`, `ClientAddActorItem` and `ReplicateActor`; needs `ReadConnectionPlatform`. See *Console viewers* below |
 | `UnequipSkinItemsForConsoles` | `false` | skin items worn on a character (outfit pieces from the cosmetics tab, e.g. the Dapper set) are left out of the equipped list while a console viewer's request is built, then put back at once; PC viewers untouched; same `ServerRequestItems` hook; needs `ReadConnectionPlatform` |
+| `DeferStructureSkins_Seconds` | `0` | EXPERIMENTAL: PC players get skinned structures plain first; after this delay each player's queue is released `ReleaseStructureSkinsPerSecond` at a time and each structure is sent again with its skin; consoles unaffected; 0 = off |
+| `ReleaseStructureSkinsPerSecond` | `50` | structure skins released per second per PC player (1 - 5000) |
 | `ProbeClientRpcs` | `false` | count item / skin / cosmetic / equipment RPCs sent to console connections, by function and target class; probe only. Test servers only |
 | `ProbeItemRequests` | `false` | log who asks for which items (platform of the viewer, equipped gear or not, skinned item count) and count skinned items built outside any request; hooks `UPrimalInventoryComponent::ServerRequestItems`; probe only, changes nothing. Test servers only |
 | `TreatAsConsolePlayers` | `[]` | testing only: EOS IDs whose connection is handled as a console whatever platform it reports, so the console path can be tested from a PC; leave empty on live |

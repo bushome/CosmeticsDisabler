@@ -8,6 +8,11 @@
   // each game function fired. Count and log only: nothing is changed. Used to find out which paths skinned items take.
   "ProbeItemEntry": false,
 
+  // Log only, off by default. When a player logs in, writes one line per skin item in the player's own inventory
+  // (class, whether the game marks it as an unlocked cosmetic, mod id) so lost unlocked skins can be compared
+  // between logins. Changes nothing.
+  "ProbeUnlockedCosmetics": false,
+
   // Log characters being replicated with a hair/eyebrow/facial hair mod cosmetic (only positive ids
   // count; -1 and 0 mean none), with the owner's platform.
   "ProbePlayers": true,
@@ -39,6 +44,16 @@
   // Same hook as BlockItemSkinsForConsoles; PC viewers are untouched and the server items stay equipped.
   // Needs ReadConnectionPlatform.
   "UnequipSkinItemsForConsoles": false,
+
+  // EXPERIMENTAL, 0 = off. Spreads structure skin loading for PC players: every skinned structure a PC player receives
+  // arrives plain first and is queued for that player. After this many seconds (counted from the first skinned structure
+  // the player sees) the queue is released ReleaseStructureSkinsPerSecond at a time; each released structure is sent again
+  // with its skin. Structures that come into range later are queued and released the same way. Console viewers are not
+  // affected (BlockStructureSkinsForConsoles decides for them). Set the delay a little above your usual login time.
+  "DeferStructureSkins_Seconds": 0,
+
+  // Structure skins released per second per PC player while DeferStructureSkins_Seconds is on (1 - 5000).
+  "ReleaseStructureSkinsPerSecond": 50,
 
   // Log which player asks for which items (hooks UPrimalInventoryComponent::ServerRequestItems): the viewer's platform,
   // whether the request is for equipped gear (what other players see on a character), and how many of the items sent

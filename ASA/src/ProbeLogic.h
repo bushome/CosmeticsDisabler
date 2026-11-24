@@ -35,6 +35,7 @@ namespace CosmeticsProbe
 	{
 		bool probe_items = true;                 // hook the item -> client net info builder
 		bool probe_item_entry = false;           // log skinned items entering an inventory (count only, changes nothing)
+		bool probe_unlocked_cosmetics = false;   // log, once per login, the skin items in the player's own inventory (changes nothing)
 		bool backup_stripped_items = true;       // write a line per item skin removed (items-<time>.jsonl) before removing it
 		bool strip_items_on_load = false;        // remove the skin (game removal call) from items as they are rebuilt from the save
 		bool strip_items_on_entry = false;       // blank the skin in item data before an item is built (restores, transfers, drops)
@@ -51,6 +52,8 @@ namespace CosmeticsProbe
 		int summary_interval_seconds = 30;       // how often the counters are written to the log
 		int max_detail_lines_per_summary = 50;   // cap on individual "seen one" log lines per summary window
 		int scan_actors_per_tick = 20000;        // actors looked at per timer tick by Scan / Strip
+		int defer_structure_skins_seconds = 0;  // EXPERIMENTAL: PC connections get skinned structures plain, released after this delay (0 = off)
+		int release_structure_skins_per_second = 50; // queued structure skins released per second per PC connection
 
 		bool enable_strip = false;               // Strip with "confirm" and Restore do nothing unless this is true
 		std::string strip_mode = "All";          // "All" (custom + official skins) or "CustomOnly"
@@ -101,6 +104,7 @@ namespace CosmeticsProbe
 		Settings s;
 		s.probe_items = detail::ReadBool(root, "ProbeItems", s.probe_items);
 		s.probe_item_entry = detail::ReadBool(root, "ProbeItemEntry", s.probe_item_entry);
+		s.probe_unlocked_cosmetics = detail::ReadBool(root, "ProbeUnlockedCosmetics", s.probe_unlocked_cosmetics);
 		s.strip_items_on_entry = detail::ReadBool(root, "StripItemsOnEntry", s.strip_items_on_entry);
 		s.strip_items_on_load = detail::ReadBool(root, "StripSavedItems", s.strip_items_on_load);
 		s.backup_stripped_items = detail::ReadBool(root, "BackupStrippedItems", s.backup_stripped_items);
@@ -116,6 +120,8 @@ namespace CosmeticsProbe
 		s.summary_interval_seconds = detail::ReadInt(root, "SummaryInterval_Seconds", s.summary_interval_seconds, 5, 3600);
 		s.max_detail_lines_per_summary = detail::ReadInt(root, "MaxDetailLinesPerSummary", s.max_detail_lines_per_summary, 0, 1000);
 		s.scan_actors_per_tick = detail::ReadInt(root, "ScanActorsPerTick", s.scan_actors_per_tick, 100, 1000000);
+		s.defer_structure_skins_seconds = detail::ReadInt(root, "DeferStructureSkins_Seconds", s.defer_structure_skins_seconds, 0, 600);
+		s.release_structure_skins_per_second = detail::ReadInt(root, "ReleaseStructureSkinsPerSecond", s.release_structure_skins_per_second, 1, 5000);
 
 		s.enable_strip = detail::ReadBool(root, "EnableStrip", s.enable_strip);
 		s.strip_per_tick = detail::ReadInt(root, "StripPerTick", s.strip_per_tick, 1, 1000);
