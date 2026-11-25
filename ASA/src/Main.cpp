@@ -1,4 +1,4 @@
-// CosmeticsDisabler 0.5.1 - probe logging, a backed-up structure skin strip, item skin strips, and ways to keep skins away.
+// CosmeticsDisabler 0.6.0 - probe logging, a backed-up structure skin strip, item skin strips, and ways to keep skins away.
 //
 // Observation (reads and logs only):
 //   * UPrimalItem.GetItemNetInfo(bool)           item data built for a client
@@ -13,6 +13,15 @@
 //                                          every change is written to backups/strip-<time>.jsonl first
 //   CosmeticsDisabler.Restore [file]       puts the skins from a backup file back (lists backups without a file)
 //   CosmeticsDisabler.Status / .Reload
+//
+// Player chat commands (off unless enabled in config.json; names are configurable):
+//   /hideskins, /showskins   a player opts in or out of being handled like a console player (needs a relog); kept in
+//                            hidden_skins_players.json; only does something when BlockItemSkinsForConsoles or
+//                            BlockStructureSkinsForConsoles is on
+//   CosmeticsDisabler.StripTribe <tribe id> [confirm]   admin: report, then strip, one tribe's structure skins (needs
+//                            EnableStrip for confirm; no cooldown; backup strip-tribe<id>-<time>.jsonl)
+//   /stripskins [confirm]    report, then strip, the skins on the caller's own tribe's structures (backup per tribe,
+//                            cooldown per tribe; undo with CosmeticsDisabler.Restore strip-tribe<id>-<time>.jsonl)
 //
 // Optional (see config.json):
 //   FilterItems / FilterItemCustomData  blank item skins in the data sent to clients (server items untouched);
@@ -44,6 +53,9 @@
 #include <vector>
 
 #include "ProbeLogic.h"
+#include "Database.h"   // MariaDB Connector/C wrapper + worker thread (used only with PlayerPreferenceStorage "Database")
+
+#include <memory>
 
 // Installs the structure channel probe hook when ProbeStructureChannels is on (defined after the hook).
 void EnsureChannelHook();
@@ -61,6 +73,7 @@ namespace
 	constexpr const char* kStripCommand = PROJECT_NAME ".Strip";
 	constexpr const char* kRestoreCommand = PROJECT_NAME ".Restore";
 	constexpr const char* kStatusCommand = PROJECT_NAME ".Status";
+	constexpr const char* kStripTribeCommand = PROJECT_NAME ".StripTribe";
 	constexpr const char* kTimerId = PROJECT_NAME "_Timer";
 
 	const char* const kHookItemNetInfo = "UPrimalItem.GetItemNetInfo(bool)";
@@ -76,7 +89,7 @@ namespace
 	const char* const kHookLoadedFromSave = "UPrimalItem.InventoryLoadedFromSaveGame()";
 	const char* const kHookAddNewItem = "UPrimalItem.AddNewItem(TSubclassOf<UPrimalItem>,UPrimalInventoryComponent*,bool,bool,float,bool,int,bool,float,bool,TSubclassOf<UPrimalItem>,float,bool,bool,bool,bool,bool,bool,UWorld*)";
 	const char* const kLevelActorsField = "ULevel.Actors2";
-	constexpr const char* kPluginVersion = "0.5.1";
+	constexpr const char* kPluginVersion = "0.6.0";
 	const char* const kReplicatedSkinClassField = "APrimalStructure.ReplicatedStructureMySkinClass";
 	const char* const kLocalSkinClassField = "APrimalStructure.StructureSkinClass";
 	// Must match the offsets cache exactly: a name that is not in it makes AsaApi terminate the server (it
@@ -131,7 +144,8 @@ namespace
 	struct ConnectionInfo
 	{
 		int platform = -1;
-		bool test_console = false;   // listed in TreatAsConsolePlayers
+		bool test_console = false;   // listed in TreatAsConsolePlayers, or opted in with /hideskins
+		bool opted_in = false;       // the reason is /hideskins (for the log label)
 	};
 	std::unordered_map<UNetConnection*, ConnectionInfo> g_connection_info;
 
@@ -160,6 +174,27 @@ namespace
 	bool g_internal_skin_call = false;    // the plugin itself is calling SetStructureSkin (the guard lets it through)
 	std::unordered_map<uintptr_t, long long> g_last_apply_notice;   // player controller -> clock + 1 of the last notice
 	long long g_next_auto_strip = -1;     // clock value of the next automatic strip (-1 = not scheduled yet)
+
+	// ---- Player commands ----
+	OptInList g_optin;                                  // /hideskins players (hidden_skins_players.json)
+	int g_scope_team = 0;                               // 0 = whole map; else a player strip limited to this team
+	std::string g_scope_requester;                      // EOS ID of the player who started the scoped run
+	std::unordered_map<int, long long> g_player_report_time;   // team -> epoch seconds of its last report
+	std::unordered_map<int, long long> g_player_strip_time;    // team -> epoch seconds of its last confirmed strip
+	long long g_prune_clock = 0;
+	bool g_scope_admin = false;                         // the scoped run was started by StripTribe (admin), not a player
+	std::unordered_map<int, long long> g_admin_report_time;    // team -> epoch seconds of its last StripTribe report
+	std::string g_command_caller;                       // EOS ID of the admin running a console command ("" = RCON)
+	// PlayerPreferenceStorage "Database": the table is read on a worker thread; results come back through g_db_results
+	// and are applied on the game thread by the timer. g_optin stays the in-memory copy that InfoFor reads.
+	std::unique_ptr<CosmeticsDb::DbWorker> g_db;
+	PreferenceDb g_db_config;                           // config the running worker was started with
+	CosmeticsDb::GameQueue g_db_results;
+	long long g_optin_write_seq = 0;                    // bumped on every local change; older table reads are dropped
+	long long g_next_db_refresh = 0;
+	bool g_db_loaded = false;                           // the table has been read at least once
+	bool g_db_failing = false;                          // last database job failed (logged once until it recovers)
+	Settings g_chat_registered;                         // the chat command names/flags registered at load (a reload does not re-register)
 
 	std::vector<BackupEntry> g_restore_entries;
 	size_t g_restore_next = 0;
@@ -271,6 +306,185 @@ namespace
 		return AsaApi::Tools::GetCurrentDir() + "/ArkApi/Plugins/" PROJECT_NAME "/backups";
 	}
 
+	long long NowSeconds()
+	{
+		return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+	}
+
+	std::string OptInPath()
+	{
+		return AsaApi::Tools::GetCurrentDir() + "/ArkApi/Plugins/" PROJECT_NAME "/hidden_skins_players.json";
+	}
+
+	// A missing file is an empty list; a damaged one is logged and treated as empty (nothing is overwritten until a player
+	// changes the list, and the damaged file is kept as .bad first).
+	void LoadOptIn()
+	{
+		g_optin.Clear();
+		std::ifstream file(OptInPath());
+		if (!file.is_open())
+			return;
+		try
+		{
+			g_optin = OptInList::FromJson(nlohmann::json::parse(file, nullptr, true, true));
+			Log::GetLog()->info("Hidden-skins players loaded: {}", g_optin.Size());
+		}
+		catch (const std::exception& e)
+		{
+			Log::GetLog()->error("{} is not readable ({}); starting with an empty list", OptInPath(), e.what());
+			file.close();
+			std::error_code ec;
+			std::filesystem::rename(OptInPath(), OptInPath() + ".bad", ec);
+		}
+	}
+
+	bool SaveOptIn()
+	{
+		std::error_code ec;
+		std::filesystem::create_directories(std::filesystem::path(OptInPath()).parent_path(), ec);
+		const std::string temp = OptInPath() + ".tmp";
+		{
+			std::ofstream out(temp, std::ios::out | std::ios::trunc);
+			if (!out.is_open())
+				return false;
+			out << g_optin.ToJson().dump(2) << '\n';
+			out.flush();
+			if (!out.good())
+				return false;
+		}
+		std::filesystem::rename(temp, OptInPath(), ec);
+		return !ec;
+	}
+
+	std::string MapLabel()
+	{
+		UWorld* world = AsaApi::GetApiUtils().GetWorld();
+		if (world == nullptr)
+			return {};
+		FString name;
+		world->GetMapName(&name);
+		std::string map = name.ToString();
+		if (map.size() > 3 && map.compare(map.size() - 3, 3, "_WP") == 0)
+			map.resize(map.size() - 3);
+		return map;
+	}
+
+	bool PreferencesInDatabase()
+	{
+		return g_settings.enable_player_hide_commands && g_settings.preferences_in_database;
+	}
+
+	// Called from worker jobs (worker thread): reports a database failure or recovery once, on the game thread.
+	void PostDbOutcome(bool ok, const std::string& what, const std::string& error)
+	{
+		g_db_results.Post([ok, what, error]
+		{
+			if (!ok && !g_db_failing)
+				Log::GetLog()->error("Player preferences database: {} failed: {} (retrying every {} s)", what, error, g_settings.database_refresh_seconds);
+			else if (ok && g_db_failing)
+				Log::GetLog()->info("Player preferences database: working again");
+			g_db_failing = !ok;
+		});
+	}
+
+	// Reads the whole table (only opted-in players are in it, so it stays small) and replaces the in-memory list,
+	// unless a player changed their choice here after the read was queued (then the next read picks it up).
+	void RefreshPreferences()
+	{
+		if (!g_db)
+			return;
+		const long long seq = g_optin_write_seq;
+		const std::string sql = SqlSelectPreferences(g_db_config.table);
+		g_db->Post([seq, sql](CosmeticsDb::Db& db)
+		{
+			auto rows = db.Query(sql);
+			if (!rows)
+			{
+				PostDbOutcome(false, "reading the table", db.LastError());
+				return;
+			}
+			std::vector<std::string> ids;
+			for (const auto& row : *rows)
+				if (!row.empty() && row[0])
+					ids.push_back(*row[0]);
+			PostDbOutcome(true, "", "");
+			g_db_results.Post([seq, ids = std::move(ids)]
+			{
+				if (!g_db || seq != g_optin_write_seq)
+					return;
+				OptInList fresh;
+				for (const std::string& id : ids)
+					fresh.Add(id);
+				if (!g_db_loaded || fresh.Size() != g_optin.Size())
+					Log::GetLog()->info("Hidden-skins players (database): {}", fresh.Size());
+				g_optin = std::move(fresh);
+				g_db_loaded = true;
+			});
+		});
+	}
+
+	void StopPreferenceDb()
+	{
+		if (g_db)
+		{
+			g_db->Stop();   // finishes queued jobs; each is bounded by the 5 s connect/read/write timeouts
+			g_db.reset();
+		}
+		g_db_results.Clear();
+		g_db_loaded = false;
+		g_db_failing = false;
+	}
+
+	// Starts (or keeps) the worker for the configured database; creates the table if it does not exist.
+	void StartPreferenceDb()
+	{
+		if (g_db && g_db_config == g_settings.db)
+			return;
+		StopPreferenceDb();
+		g_db_config = g_settings.db;
+		CosmeticsDb::DbConfig cfg;
+		cfg.host = g_db_config.host;
+		cfg.port = static_cast<unsigned int>(g_db_config.port);
+		cfg.user = g_db_config.user;
+		cfg.password = g_db_config.password;
+		cfg.database = g_db_config.name;
+		cfg.ssl = g_db_config.ssl;
+		g_db = std::make_unique<CosmeticsDb::DbWorker>(cfg);
+		g_db->Start();
+		const std::string create = SqlCreatePreferenceTable(g_db_config.table);
+		g_db->Post([create](CosmeticsDb::Db& db)
+		{
+			if (db.Exec(create) < 0)
+				PostDbOutcome(false, "creating the table", db.LastError());
+		});
+		g_optin.Clear();
+		RefreshPreferences();
+		g_next_db_refresh = g_clock + g_settings.database_refresh_seconds;
+		Log::GetLog()->info("Player preferences: database {}:{}/{} table {}", g_db_config.host, g_db_config.port, g_db_config.name, g_db_config.table);
+	}
+
+	// At load and on Reload: the file, or the database.
+	void LoadPreferences()
+	{
+		if (PreferencesInDatabase())
+		{
+			StartPreferenceDb();
+			return;
+		}
+		StopPreferenceDb();
+		LoadOptIn();
+	}
+
+	void DbTick()
+	{
+		g_db_results.Drain();
+		if (g_db && g_clock >= g_next_db_refresh)
+		{
+			g_next_db_refresh = g_clock + g_settings.database_refresh_seconds;
+			RefreshPreferences();
+		}
+	}
+
 	Settings LoadSettings()
 	{
 		const std::string path = AsaApi::Tools::GetCurrentDir() + "/ArkApi/Plugins/" PROJECT_NAME "/config.json";
@@ -352,8 +566,8 @@ namespace
 	{
 		std::error_code ec;
 		std::filesystem::create_directories(BackupDir(), ec);
-		g_backup_name = "strip-" + std::to_string(std::chrono::duration_cast<std::chrono::seconds>(
-			std::chrono::system_clock::now().time_since_epoch()).count()) + ".jsonl";
+		g_backup_name = g_scope_team != 0 ? TribeBackupName(g_scope_team, NowSeconds())
+			: "strip-" + std::to_string(NowSeconds()) + ".jsonl";
 		g_backup_used = false;
 		g_backup.open(BackupDir() + "/" + g_backup_name, std::ios::out | std::ios::app);
 		return g_backup.is_open();
@@ -424,14 +638,108 @@ namespace
 		}
 	}
 
+	// Tells a player (found by EOS ID) something; false when they are no longer online.
+	bool NotifyPlayer(const std::string& eos_id, const std::string& text)
+	{
+		UWorld* world = AsaApi::GetApiUtils().GetWorld();
+		if (world == nullptr || eos_id.empty())
+			return false;
+		for (auto& weak : world->PlayerControllerListField())
+		{
+			APlayerController* controller = weak.Get();
+			if (controller == nullptr || !controller->IsA(AShooterPlayerController::GetPrivateStaticClass()))
+				continue;
+			auto* shooter = static_cast<AShooterPlayerController*>(controller);
+			if (ToLower(AsaApi::GetApiUtils().GetEOSIDFromController(shooter).ToString()) != ToLower(eos_id))
+				continue;
+			AsaApi::GetApiUtils().SendServerMessage(shooter, FColorList::Green, "{}", text);
+			return true;
+		}
+		return false;
+	}
+
+	// End of a player strip run (finished or stopped): tell the player and update the per-tribe state.
+	void FinishScopedRun(bool aborted, const std::string& why)
+	{
+		const int team = g_scope_team;
+		const std::string requester = g_scope_requester;
+		const bool apply = g_run == Run::StripApply;
+		const std::string backup_name = g_backup_name;
+		const bool backup_used = g_backup_used;
+		std::string message;
+		if (g_scope_admin)
+		{
+			// StripTribe: no player cooldown; the reply goes to the admin who ran it (console) and the log.
+			if (aborted)
+				message = "CosmeticsDisabler: tribe " + std::to_string(team) + " strip stopped: " + why;
+			else if (!apply)
+			{
+				if (g_scan_result.would_strip > 0)
+					g_admin_report_time[team] = NowSeconds();
+				message = "CosmeticsDisabler: tribe " + std::to_string(team) + " report: " + std::to_string(g_scan_result.would_strip)
+					+ " structures with a skin (" + std::to_string(g_scan_result.custom) + " custom, " + std::to_string(g_scan_result.official)
+					+ " official)" + (g_scan_result.would_strip > 0 ? ". Run " + std::string(kStripTribeCommand) + " " + std::to_string(team)
+					+ " confirm within 10 minutes to remove them" : "");
+			}
+			else
+			{
+				g_admin_report_time.erase(team);
+				message = "CosmeticsDisabler: tribe " + std::to_string(team) + ": skins removed from " + std::to_string(g_scan_result.stripped)
+					+ " structures" + (g_scan_result.strip_failed > 0 ? " (" + std::to_string(g_scan_result.strip_failed) + " could not be changed)" : "")
+					+ (backup_used ? ", backup " + backup_name + " (undo with " + kRestoreCommand + " " + backup_name + ")" : "");
+			}
+			Log::GetLog()->info("{}", message);
+			NotifyPlayer(requester, message);
+			g_scope_team = 0;
+			g_scope_requester.clear();
+			g_scope_admin = false;
+			return;
+		}
+		if (aborted)
+		{
+			message = "Skin strip stopped: " + why + ". Nothing further was changed.";
+		}
+		else if (!apply)
+		{
+			if (g_scan_result.would_strip == 0)
+			{
+				message = "Your tribe's structures have no skins to remove.";
+			}
+			else
+			{
+				g_player_report_time[team] = NowSeconds();
+				message = "Report: " + std::to_string(g_scan_result.would_strip) + " of your tribe's structures have a skin ("
+					+ std::to_string(g_scan_result.custom) + " custom, " + std::to_string(g_scan_result.official) + " official). Type "
+					+ g_settings.strip_skins_command + " confirm within 10 minutes to remove them. The structures stay as they are.";
+			}
+		}
+		else
+		{
+			g_player_strip_time[team] = NowSeconds();
+			g_player_report_time.erase(team);
+			message = "Skins removed from " + std::to_string(g_scan_result.stripped) + " structures"
+				+ (g_scan_result.strip_failed > 0 ? " (" + std::to_string(g_scan_result.strip_failed) + " could not be changed)" : "")
+				+ ". Relog to see the change.";
+		}
+		Log::GetLog()->info("Player strip (team {}, {}): {}{}", team, apply ? "confirmed" : "report", message,
+			backup_used ? " backup " + backup_name : "");
+		NotifyPlayer(requester, message);
+		g_scope_team = 0;
+		g_scope_requester.clear();
+		g_scope_admin = false;
+	}
+
 	void FinishRun(const char* what)
 	{
 		CloseBackupFile();
-		Log::GetLog()->info("{} finished\n{}", what, FormatScan(g_scan_result));
-		if (g_run == Run::StripDry)
+		Log::GetLog()->info("{} finished (scope: {})\n{}", what, g_scope_team == 0 ? std::string("whole map") : "team " + std::to_string(g_scope_team),
+			FormatScan(g_scan_result));
+		if (g_run == Run::StripDry && g_scope_team == 0)
 			g_dry_run_done = true;
 		if (g_run == Run::StripApply && g_backup_used)
 			Log::GetLog()->info("Backup: {}/{}  (undo with {} {})", BackupDir(), g_backup_name, kRestoreCommand, g_backup_name);
+		if (g_scope_team != 0)
+			FinishScopedRun(false, "");
 		g_run = Run::Idle;
 	}
 
@@ -439,16 +747,23 @@ namespace
 	{
 		CloseBackupFile();
 		Log::GetLog()->error("Run stopped: {}", why);
+		if (g_scope_team != 0)
+			FinishScopedRun(true, why);
 		g_run = Run::Idle;
 	}
 
 	// Returns false when the strip budget for this tick is used up (the actor is NOT consumed then).
 	bool HandleStructure(APrimalStructure* structure, int& strip_budget)
 	{
+		// A player strip only looks at structures of the caller's own team.
+		if (g_scope_team != 0 && !InPlayerStripScope(structure->TargetingTeamField(), g_scope_team))
+			return true;
 		const SkinState skin = ReadSkin(structure);
 		const bool flag = structure->HasAppliedCustomCosmetic();
 		const bool custom = skin.kind == SkinKind::Custom;
-		const bool strip = skin.kind != SkinKind::None && ShouldStrip(g_settings, skin.kind, skin.class_name);
+		// A player strip removes every skin kind (the operator's allow list still protects its classes).
+		const bool strip = skin.kind != SkinKind::None
+			&& (g_scope_team != 0 ? !IsAllowed(g_settings, skin.class_name) : ShouldStrip(g_settings, skin.kind, skin.class_name));
 
 		// Budget used up: leave this structure for the next tick without counting anything yet,
 		// so it is not counted twice.
@@ -687,12 +1002,19 @@ namespace
 	}
 
 	void DeferTick();
+	void PruneConnectionInfo();   // defined with the player commands below
 
 	void OnTimer()
 	{
 		++g_clock;
 		g_game_thread = std::this_thread::get_id();
 		DeferTick();
+		DbTick();
+		if (g_clock - g_prune_clock >= 5)
+		{
+			g_prune_clock = g_clock;
+			PruneConnectionInfo();
+		}
 		FlushItemBackup();
 		MaybeAutoStrip();
 		try
@@ -750,6 +1072,7 @@ namespace
 		std::string error;
 		if (ReloadSettings(error))
 		{
+			LoadPreferences();
 			EnsureChannelHook();
 			return "CosmeticsDisabler: config reloaded (hook toggles apply immediately)";
 		}
@@ -836,6 +1159,53 @@ namespace
 		return "CosmeticsDisabler: restoring " + std::to_string(g_restore_entries.size()) + " structures from " + name + "; result goes to the log";
 	}
 
+	// StripTribe <tribe id> [confirm]: an admin strips every skin from one tribe's structures on this map. Same run, backup and
+	// restore as the player /stripskins, but no cooldown and any tribe. The report must come first (within 10 minutes).
+	std::string RunStripTribe(const std::string& args)
+	{
+		const std::string usage = std::string("CosmeticsDisabler: use ") + kStripTribeCommand + " <tribe id> for a report, then " + kStripTribeCommand
+			+ " <tribe id> confirm";
+		if (g_run != Run::Idle)
+			return "CosmeticsDisabler: another run is already in progress";
+		const std::string id_text = FirstWord(args);
+		const int team = ParseTribeId(id_text);
+		if (team == 0)
+			return id_text.empty() ? usage : "CosmeticsDisabler: \"" + id_text + "\" is not a tribe id (a number from 50000 up)";
+		const std::string word = FirstWord(ArgsOf(args));
+
+		if (word.empty())
+		{
+			g_scope_team = team;
+			g_scope_requester = g_command_caller;
+			g_scope_admin = true;
+			StartRun(Run::StripDry);
+			return "CosmeticsDisabler: report for tribe " + std::to_string(team) + " started (nothing is changed); the result is sent here and to the log";
+		}
+		if (word != "confirm")
+			return usage;
+		if (!g_settings.enable_strip)
+			return "CosmeticsDisabler: strip refused, EnableStrip is false in config.json";
+		const auto report = g_admin_report_time.find(team);
+		if (report == g_admin_report_time.end() || !PlayerReportStillValid(NowSeconds(), report->second))
+			return std::string("CosmeticsDisabler: run ") + kStripTribeCommand + " " + std::to_string(team)
+				+ " first; confirm is allowed for 10 minutes after a report that found skins";
+
+		g_scope_team = team;
+		g_scope_requester = g_command_caller;
+		g_scope_admin = true;
+		if (!OpenBackupFile())
+		{
+			g_scope_team = 0;
+			g_scope_requester.clear();
+			g_scope_admin = false;
+			return "CosmeticsDisabler: strip refused, cannot create the backup file in " + BackupDir();
+		}
+		StartRun(Run::StripApply);
+		Log::GetLog()->info("StripTribe confirmed for tribe {} by {} (backup {})", team, g_command_caller.empty() ? std::string("RCON") : g_command_caller,
+			g_backup_name);
+		return "CosmeticsDisabler: stripping tribe " + std::to_string(team) + " (backup " + g_backup_name + "); the result is sent here and to the log";
+	}
+
 	std::string RunStatus(const std::string&)
 	{
 		Log::GetLog()->info("{}", FormatSummary(g_counters, static_cast<int>(g_clock - g_window_start)));
@@ -845,13 +1215,170 @@ namespace
 			+ std::to_string(g_counters.skin_messages) + " - details in the log";
 	}
 
+	// ---- Player chat commands ----
+
+	void Tell(AShooterPlayerController* pc, const std::string& text)
+	{
+		AsaApi::GetApiUtils().SendServerMessage(pc, FColorList::Green, "{}", text);
+	}
+
+	std::string EosOf(AShooterPlayerController* pc)
+	{
+		return AsaApi::GetApiUtils().GetEOSIDFromController(pc).ToString();
+	}
+
+	// /hideskins and /showskins: the choice is stored by EOS ID and takes effect when the connection is made again.
+	void ChatSetHidden(AShooterPlayerController* pc, bool hide)
+	{
+		if (pc == nullptr)
+			return;
+		if (!g_settings.enable_player_hide_commands)
+			return Tell(pc, "This command is not enabled on this server.");
+		if (!ConsoleBlockingOn(g_settings))
+			return Tell(pc, "Skin hiding is not switched on for this server, so this would change nothing.");
+		const std::string eos_id = EosOf(pc);
+		if (!OptInList::IsValidId(eos_id))
+			return Tell(pc, "Could not read your player ID. Try again in a moment.");
+
+		if (PreferencesInDatabase() && !g_db_loaded)
+			return Tell(pc, "Your saved choice cannot be reached right now. Try again in a minute.");
+
+		if (hide)
+		{
+			if (g_optin.Contains(eos_id))
+				return Tell(pc, "Skins are already hidden for you. If you still see them, relog.");
+			g_optin.Add(eos_id);
+		}
+		else
+		{
+			if (!g_optin.Contains(eos_id))
+				return Tell(pc, "Skins are not hidden for you. Nothing to change.");
+			g_optin.Remove(eos_id);
+		}
+		const std::string done = hide ? "Skins will be hidden for you like on console. Relog (disconnect and join again) to apply it. Use "
+				+ g_settings.show_skins_command + " to undo."
+			: "Skins will show normally again. Relog (disconnect and join again) to apply it.";
+
+		if (PreferencesInDatabase())
+		{
+			// Saved by the worker; the player is told when the database has it (it then counts on every server).
+			++g_optin_write_seq;
+			const std::string sql = SqlSetPreference(g_db_config.table, eos_id, hide, MapLabel());
+			g_db->Post([sql, eos_id, hide, done](CosmeticsDb::Db& db)
+			{
+				const bool ok = db.Exec(sql) >= 0;
+				const std::string error = ok ? "" : db.LastError();
+				PostDbOutcome(ok, "saving a choice", error);
+				g_db_results.Post([ok, eos_id, hide, done]
+				{
+					if (!ok)
+					{
+						++g_optin_write_seq;
+						if (hide) g_optin.Remove(eos_id); else g_optin.Add(eos_id);
+						NotifyPlayer(eos_id, "Could not save your choice. Try again in a minute.");
+						return;
+					}
+					Log::GetLog()->info("A player {} skins (EOS {}), saved to the database", hide ? "hides" : "shows", eos_id);
+					NotifyPlayer(eos_id, done);
+				});
+			});
+			return Tell(pc, "Saving your choice...");
+		}
+
+		if (!SaveOptIn())
+		{
+			// keep memory and file in step: undo the change
+			if (hide) g_optin.Remove(eos_id); else g_optin.Add(eos_id);
+			Log::GetLog()->error("Could not write {}", OptInPath());
+			return Tell(pc, "Could not save your choice. Tell an admin.");
+		}
+		Log::GetLog()->info("A player {} skins (EOS {}); {} players opted in", hide ? "hides" : "shows", eos_id, g_optin.Size());
+		Tell(pc, done);
+	}
+
+	void ChatHide(AShooterPlayerController* pc, FString*, int, int) { ChatSetHidden(pc, true); }
+	void ChatShow(AShooterPlayerController* pc, FString*, int, int) { ChatSetHidden(pc, false); }
+
+	// /stripskins (report) and /stripskins confirm: removes the skins from the caller's own tribe's structures.
+	void ChatStrip(AShooterPlayerController* pc, FString* message, int, int)
+	{
+		if (pc == nullptr)
+			return;
+		if (!g_settings.enable_player_strip)
+			return Tell(pc, "This command is not enabled on this server.");
+		const int team = pc->TargetingTeamField();
+		if (team < kFirstPlayerTeam)
+			return Tell(pc, "You are not in a tribe, so there is nothing to strip.");
+		const std::string eos_id = EosOf(pc);
+		if (eos_id.empty())
+			return Tell(pc, "Could not read your player ID. Try again in a moment.");
+		if (g_run != Run::Idle)
+			return Tell(pc, "The server is busy with another run. Try again in a minute.");
+
+		const std::string word = FirstWord(message != nullptr ? ArgsOf(message->ToString()) : std::string());
+		const long long now = NowSeconds();
+		const auto last = g_player_strip_time.find(team);
+		const int wait = CooldownMinutesLeft(now, last != g_player_strip_time.end() ? last->second : 0, g_settings.player_strip_cooldown_minutes);
+		if (wait > 0)
+			return Tell(pc, "Your tribe stripped skins recently. Try again in " + std::to_string(wait) + " minutes.");
+
+		if (word.empty())
+		{
+			g_scope_team = team;
+			g_scope_requester = eos_id;
+			StartRun(Run::StripDry);
+			Log::GetLog()->info("Player strip report started for team {} by {}", team, eos_id);
+			return Tell(pc, "Counting the skins on your tribe's structures (nothing is changed). I will message you with the result.");
+		}
+		if (word != "confirm")
+			return Tell(pc, "Use " + g_settings.strip_skins_command + " for a report, then " + g_settings.strip_skins_command + " confirm.");
+
+		const auto report = g_player_report_time.find(team);
+		if (report == g_player_report_time.end() || !PlayerReportStillValid(now, report->second))
+			return Tell(pc, "Run " + g_settings.strip_skins_command + " first and read the report; confirm is allowed for 10 minutes after it.");
+
+		g_scope_team = team;
+		g_scope_requester = eos_id;
+		if (!OpenBackupFile())
+		{
+			g_scope_team = 0;
+			g_scope_requester.clear();
+			return Tell(pc, "Could not create the backup file. Tell an admin.");
+		}
+		StartRun(Run::StripApply);
+		Log::GetLog()->info("Player strip confirmed for team {} by {} (backup {})", team, eos_id, g_backup_name);
+		Tell(pc, "Removing the skins from your tribe's structures. This takes a little while, I will message you when it is done.");
+	}
+
+	// Entries of connections that no longer exist are dropped, so a returning player is read again (the platform and the
+	// /hideskins choice are fixed per connection). Cheap: runs every few seconds over the connected players only.
+	void PruneConnectionInfo()
+	{
+		if (g_connection_info.empty())
+			return;
+		UWorld* world = AsaApi::GetApiUtils().GetWorld();
+		if (world == nullptr)
+			return;
+		std::unordered_set<UNetConnection*> live;
+		for (auto& weak : world->PlayerControllerListField())
+		{
+			APlayerController* controller = weak.Get();
+			if (controller != nullptr)
+				live.insert(controller->GetNetConnection());
+		}
+		for (auto entry = g_connection_info.begin(); entry != g_connection_info.end();)
+			entry = live.count(entry->first) != 0 ? std::next(entry) : g_connection_info.erase(entry);
+	}
+
 	template <std::string (*Fn)(const std::string&)>
 	void ConsoleCommand(APlayerController* player_controller, FString* command, bool /*write_to_log*/)
 	{
 		auto* shooter_controller = static_cast<AShooterPlayerController*>(player_controller);
 		if (shooter_controller == nullptr || !shooter_controller->bIsAdmin()())
 			return;
+		g_command_caller = AsaApi::GetApiUtils().GetEOSIDFromController(shooter_controller).ToString();
 		const std::string reply = Fn(command != nullptr ? ArgsOf(command->ToString()) : std::string());
+		g_command_caller.clear();
 		AsaApi::GetApiUtils().SendServerMessage(shooter_controller, FColorList::Green, "{}", reply);
 	}
 
@@ -1442,7 +1969,7 @@ namespace
 				g_off_connection_platform = FieldOffset(connection, "UNetConnection.ConnectionPlatform");
 			info.platform = ReadAt<uint8_t>(connection, g_off_connection_platform);
 		}
-		if (!g_settings.treat_as_console_players.empty())
+		if (!g_settings.treat_as_console_players.empty() || (g_settings.enable_player_hide_commands && !g_optin.Empty()))
 		{
 			AActor* owner = *GetNativePointerField<AActor**>(connection, "UNetConnection.OwningActor");
 			if (owner == nullptr || !owner->IsA(AShooterPlayerController::GetPrivateStaticClass()))
@@ -1450,10 +1977,11 @@ namespace
 			const std::string eos_id = AsaApi::GetApiUtils().GetEOSIDFromController(static_cast<AShooterPlayerController*>(owner)).ToString();
 			if (eos_id.empty())
 				return info;
-			info.test_console = IsTreatedAsConsole(g_settings, eos_id);
+			info.opted_in = g_settings.enable_player_hide_commands && g_optin.Contains(eos_id);
+			info.test_console = IsTreatedAsConsole(g_settings, g_optin, eos_id);
 			if (info.test_console)
-				Log::GetLog()->info("TreatAsConsolePlayers: {} (connection platform {}) is handled as a console player", eos_id,
-					ConnectionPlatformLabel(info.platform));
+				Log::GetLog()->info("{}: {} (connection platform {}) is handled as a console player",
+					info.opted_in ? "/hideskins" : "TreatAsConsolePlayers", eos_id, ConnectionPlatformLabel(info.platform));
 		}
 		g_connection_info[connection] = info;
 		return info;
@@ -1461,7 +1989,8 @@ namespace
 
 	std::string ConnectionLabel(const ConnectionInfo& info)
 	{
-		return info.test_console ? ConnectionPlatformLabel(info.platform) + " as console (test)" : ConnectionPlatformLabel(info.platform);
+		return info.test_console ? ConnectionPlatformLabel(info.platform) + (info.opted_in ? " as console (opt-in)" : " as console (test)")
+			: ConnectionPlatformLabel(info.platform);
 	}
 }
 
@@ -2047,6 +2576,19 @@ extern "C" __declspec(dllexport) void Plugin_Init()
 	AddBoth<&RunStrip>(kStripCommand);
 	AddBoth<&RunRestore>(kRestoreCommand);
 	AddBoth<&RunStatus>(kStatusCommand);
+	AddBoth<&RunStripTribe>(kStripTribeCommand);
+	LoadPreferences();
+	{
+		auto& commands = AsaApi::GetCommands();
+		if (g_settings.enable_player_hide_commands)
+		{
+			commands.AddChatCommand(FString(g_settings.hide_skins_command), &ChatHide);
+			commands.AddChatCommand(FString(g_settings.show_skins_command), &ChatShow);
+		}
+		if (g_settings.enable_player_strip)
+			commands.AddChatCommand(FString(g_settings.strip_skins_command), &ChatStrip);
+		g_chat_registered = g_settings;   // remembered so unload removes exactly what was added
+	}
 	AsaApi::GetCommands().AddOnTimerCallback(kTimerId, &OnTimer);
 
 	g_game_thread = std::this_thread::get_id();
@@ -2071,6 +2613,21 @@ extern "C" __declspec(dllexport) void Plugin_Unload()
 	RemoveBoth(kStripCommand);
 	RemoveBoth(kRestoreCommand);
 	RemoveBoth(kStatusCommand);
+	RemoveBoth(kStripTribeCommand);
+	{
+		auto& commands = AsaApi::GetCommands();
+		if (g_chat_registered.enable_player_hide_commands)
+		{
+			commands.RemoveChatCommand(FString(g_chat_registered.hide_skins_command));
+			commands.RemoveChatCommand(FString(g_chat_registered.show_skins_command));
+		}
+		if (g_chat_registered.enable_player_strip)
+			commands.RemoveChatCommand(FString(g_chat_registered.strip_skins_command));
+	}
+	g_scope_team = 0;
+	g_scope_requester.clear();
+	g_scope_admin = false;
+	StopPreferenceDb();
 
 	auto& hooks = AsaApi::GetHooks();
 	hooks.DisableHook(kHookItemNetInfo, &Hook_UPrimalItem_GetItemNetInfo);

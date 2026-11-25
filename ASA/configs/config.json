@@ -30,5 +30,22 @@
   "StripOnMapLoad": false,
   "StripOnMapLoadDelay_Seconds": 120,
   "StripRepeat_Minutes": 0,
-  "BlockSkinApplyMessage": ""
+  "BlockSkinApplyMessage": "",
+  "EnablePlayerHideCommands": false,
+  "HideSkinsCommand": "/hideskins",
+  "ShowSkinsCommand": "/showskins",
+  "EnablePlayerStrip": false,
+  "StripSkinsCommand": "/stripskins",
+  "PlayerStripCooldown_Minutes": 30,
+  "PlayerPreferenceStorage": "File",
+  "DatabaseRefresh_Seconds": 30,
+  "Database": {
+    "Host": "127.0.0.1",
+    "Port": 3306,
+    "User": "",
+    "Password": "",
+    "Name": "cosmeticsdisabler",
+    "Table": "hidden_skins_players",
+    "Ssl": false
+  }
 }

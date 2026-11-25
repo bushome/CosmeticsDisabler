@@ -12,6 +12,7 @@
   <ItemGroup>
     
     <ClInclude Include="src\ProbeLogic.h" />
+    <ClInclude Include="src\Database.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" />
@@ -74,7 +75,8 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableUAC>false</EnableUAC>
-      <AdditionalDependencies>$(AsaApiDir)out_lib\AsaApi.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- libmariadb (static) needs ws2_32, secur32, crypt32, shlwapi and bcrypt; vcpkg links libmariadb itself. -->
+      <AdditionalDependencies>$(AsaApiDir)out_lib\AsaApi.lib;ws2_32.lib;secur32.lib;crypt32.lib;shlwapi.lib;bcrypt.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PreBuildEvent>
       <Command>if exist "$(TargetDir)$(TargetFileName).arkapi" del /q "$(TargetDir)$(TargetFileName).arkapi"</Command>
@@ -87,7 +89,8 @@ copy /y "$(TargetDir)$(TargetName).pdb" "$(TargetDir)CosmeticsDisabler\"
 copy /y "$(ProjectDir)configs\PluginInfo.json" "$(TargetDir)CosmeticsDisabler\"
 copy /y "$(ProjectDir)configs\config.json" "$(TargetDir)CosmeticsDisabler\"
 copy /y "$(ProjectDir)configs\config.commented.json" "$(TargetDir)CosmeticsDisabler\"
-copy /y "$(SolutionDir)..\THIRD-PARTY-NOTICES.md" "$(TargetDir)CosmeticsDisabler\"</Command>
+copy /y "$(SolutionDir)..\THIRD-PARTY-NOTICES.md" "$(TargetDir)CosmeticsDisabler\"
+copy /y "$(SolutionDir)..\LICENSE-LGPL-2.1.txt" "$(TargetDir)CosmeticsDisabler\"</Command>
       <Message>Assembling out\CosmeticsDisabler\ plugin folder</Message>
     </PostBuildEvent>
   </ItemDefinitionGroup>

@@ -152,5 +152,48 @@
   // apply it. For a structure skin it goes to the player standing nearest the structure (within 30 m), at most
   // once every 5 seconds per player, because the server cannot tell who clicked. Empty = no message. Up to 300
   // characters.
-  "BlockSkinApplyMessage": ""
+  "BlockSkinApplyMessage": "",
+
+  // Player chat commands. Command names start with a slash and are registered when the server starts (changing
+  // them or switching a feature on needs a restart, not just a reload).
+  //
+  // EnablePlayerHideCommands: a PC player types HideSkinsCommand to be handled like a console player (skins
+  // blanked for them by the console filters) and ShowSkinsCommand to go back. Each needs a relog to apply. The
+  // choice is kept by EOS ID, in a file or a database (PlayerPreferenceStorage below). It only does something while
+  // BlockItemSkinsForConsoles or
+  // BlockStructureSkinsForConsoles is on; otherwise the command tells the player it would change nothing.
+  "EnablePlayerHideCommands": false,
+  "HideSkinsCommand": "/hideskins",
+  "ShowSkinsCommand": "/showskins",
+
+  // EnablePlayerStrip: any member of a tribe can type StripSkinsCommand for a report of how many of the tribe's
+  // structures on this map carry a skin, then "StripSkinsCommand confirm" (within 10 minutes) to remove them.
+  // Only structures of the caller's own tribe (or their own team when untribed) are touched, every skin kind is
+  // removed (AllowSkinClasses still protects its classes), the structures stay. A backup is written first to
+  // backups/strip-tribe<id>-<time>.jsonl; an admin can undo it with CosmeticsDisabler.Restore <file>. Does not
+  // need EnableStrip. One run at a time on the server; each tribe waits PlayerStripCooldown_Minutes (0 - 1440)
+  // after a confirmed strip.
+  "EnablePlayerStrip": false,
+  "StripSkinsCommand": "/stripskins",
+  "PlayerStripCooldown_Minutes": 30,
+
+  // Where the /hideskins choices are kept.
+  //   "File":     ArkApi/Plugins/CosmeticsDisabler/hidden_skins_players.json, this server only.
+  //   "Database": a MariaDB / MySQL table that every server of the cluster points at, so a choice made on one map
+  //               counts on all of them. The table is created if it does not exist. Each server reads it at startup and
+  //               every DatabaseRefresh_Seconds (5 - 3600); a choice made on another map is picked up by the next read,
+  //               so a player who moves maps within that time may need one more relog. Reads and writes run on a
+  //               background thread; if the database is down the server keeps the last list it read and logs the
+  //               error once. The database user needs CREATE (once), SELECT, INSERT, UPDATE and DELETE on the table.
+  "PlayerPreferenceStorage": "File",
+  "DatabaseRefresh_Seconds": 30,
+  "Database": {
+    "Host": "127.0.0.1",
+    "Port": 3306,
+    "User": "",
+    "Password": "",
+    "Name": "cosmeticsdisabler",          // the database (schema); must already exist
+    "Table": "hidden_skins_players",      // letters, digits and underscores
+    "Ssl": false                          // false = plain connection (local / LAN MariaDB without TLS)
+  }
 }

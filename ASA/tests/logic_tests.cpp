@@ -401,8 +401,105 @@ static void TestFormatting()
 }
 
 // Expectations for configs/config.json and configs/config.commented.json as shipped.
+static void TestPlayerCommands()
+{
+	const Settings d;
+	CHECK(!d.enable_player_hide_commands && !d.enable_player_strip);
+	CHECK(d.hide_skins_command == "/hideskins" && d.show_skins_command == "/showskins" && d.strip_skins_command == "/stripskins");
+	CHECK(d.player_strip_cooldown_minutes == 30);
+	CHECK(ParseSettings(Parse(R"({"EnablePlayerHideCommands": true, "HideSkinsCommand": "/nocosm", "StripSkinsCommand": "/clean_up"})")).hide_skins_command == "/nocosm");
+	CHECK(ParseSettings(Parse(R"({"EnablePlayerStrip": true})")).enable_player_strip);
+	CHECK(ParseSettings(Parse(R"({"PlayerStripCooldown_Minutes": 0})")).player_strip_cooldown_minutes == 0);
+	CHECK(Throws([] { ParseSettings(Parse(R"({"PlayerStripCooldown_Minutes": 2000})")); }));
+	CHECK(Throws([] { ParseSettings(Parse(R"({"HideSkinsCommand": "hideskins"})")); }));      // no slash
+	CHECK(Throws([] { ParseSettings(Parse(R"({"ShowSkinsCommand": "/show skins"})")); }));    // space
+	CHECK(Throws([] { ParseSettings(Parse(R"({"StripSkinsCommand": "/"})")); }));
+	CHECK(Throws([] { ParseSettings(Parse(R"({"StripSkinsCommand": 5})")); }));
+
+	// opt-in list
+	OptInList list;
+	CHECK(list.Empty() && !list.Contains("0002841F112C4CEE8F3C828460BA88FF"));
+	CHECK(list.Add("0002841F112C4CEE8F3C828460BA88FF"));
+	CHECK(!list.Add("0002841f112c4cee8f3c828460ba88ff"));      // same ID, other case
+	CHECK(list.Contains("0002841f112c4cee8f3c828460ba88ff") && list.Size() == 1);
+	CHECK(!list.Add("") && !list.Add("bad id") && !list.Add("../x"));
+	CHECK(!list.Remove("00000000000000000000000000000001"));
+	const OptInList again = OptInList::FromJson(list.ToJson());
+	CHECK(again.Size() == 1 && again.Contains("0002841F112C4CEE8F3C828460BA88FF"));
+	CHECK(OptInList::FromJson(Parse(R"({"HiddenSkinsPlayers": ["abc123", 5, "", "abc123"]})")).Size() == 1);
+	CHECK(Throws([] { OptInList::FromJson(Parse("[]")); }));
+	CHECK(Throws([] { OptInList::FromJson(Parse(R"({"HiddenSkinsPlayers": 3})")); }));
+	CHECK(list.Remove("0002841F112C4CEE8F3C828460BA88FF") && list.Empty());
+
+	// who counts as a console
+	Settings s;
+	OptInList opted;
+	opted.Add("aaaa1111");
+	CHECK(!IsTreatedAsConsole(s, opted, "aaaa1111"));           // commands not enabled: the file is ignored
+	s.enable_player_hide_commands = true;
+	CHECK(IsTreatedAsConsole(s, opted, "AAAA1111"));
+	CHECK(!IsTreatedAsConsole(s, opted, "bbbb2222"));
+	s.treat_as_console_players.push_back("bbbb2222");
+	CHECK(IsTreatedAsConsole(s, opted, "bbbb2222"));            // the test list still works on its own
+	CHECK(!ConsoleBlockingOn(s));
+	s.block_item_skins_for_consoles = true;
+	CHECK(ConsoleBlockingOn(s));
+	s.block_item_skins_for_consoles = false;
+	s.block_structure_skins_for_consoles = true;
+	CHECK(ConsoleBlockingOn(s));
+
+	// player strip scope: only the caller's own team, and only a player or tribe team
+	CHECK(InPlayerStripScope(123456, 123456));
+	CHECK(!InPlayerStripScope(123457, 123456));
+	CHECK(!InPlayerStripScope(0, 0));                           // no team: never in scope
+	CHECK(!InPlayerStripScope(49999, 49999));                   // below the first player team (NPC / wild)
+	CHECK(InPlayerStripScope(50000, 50000));
+
+	// cooldown and report validity
+	CHECK(CooldownMinutesLeft(1000, 0, 30) == 0);               // never stripped
+	CHECK(CooldownMinutesLeft(1000, 900, 0) == 0);              // cooldown off
+	CHECK(CooldownMinutesLeft(1000 + 60, 1000, 30) == 29);      // 29 min 0 s left
+	CHECK(CooldownMinutesLeft(1000 + 30 * 60, 1000, 30) == 0);
+	CHECK(CooldownMinutesLeft(1000 + 29 * 60 + 1, 1000, 30) == 1);   // 59 s left rounds up
+	CHECK(PlayerReportStillValid(1500, 1000) && PlayerReportStillValid(1600, 1000));
+	CHECK(!PlayerReportStillValid(1601, 1000) && !PlayerReportStillValid(1000, 0));
+	CHECK(TribeBackupName(123456, 1700000000) == "strip-tribe123456-1700000000.jsonl");
+	CHECK(IsSafeBackupName(TribeBackupName(123456, 1700000000)));
+	CHECK(ParseTribeId("1234567890") == 1234567890 && ParseTribeId("50000") == 50000);
+	CHECK(ParseTribeId("") == 0 && ParseTribeId("49999") == 0 && ParseTribeId("12a45") == 0 && ParseTribeId("-50000") == 0);
+	CHECK(ParseTribeId("2147483648") == 0 && ParseTribeId("99999999999") == 0);
+
+	// preference storage
+	CHECK(!d.preferences_in_database && d.database_refresh_seconds == 30);
+	CHECK(d.db.port == 3306 && d.db.name == "cosmeticsdisabler" && d.db.table == "hidden_skins_players" && !d.db.ssl);
+	{
+		const Settings db = ParseSettings(Parse(R"({"PlayerPreferenceStorage": "Database", "DatabaseRefresh_Seconds": 60,
+			"Database": {"Host": "10.0.0.5", "Port": 3307, "User": "ark", "Password": "x", "Name": "cluster_prefs", "Table": "hide_v2", "Ssl": true}})"));
+		CHECK(db.preferences_in_database && db.database_refresh_seconds == 60);
+		CHECK(db.db.host == "10.0.0.5" && db.db.port == 3307 && db.db.user == "ark" && db.db.name == "cluster_prefs" && db.db.table == "hide_v2" && db.db.ssl);
+	}
+	CHECK(Throws([] { ParseSettings(Parse(R"({"PlayerPreferenceStorage": "Mongo"})")); }));
+	CHECK(Throws([] { ParseSettings(Parse(R"({"PlayerPreferenceStorage": "Database"})")); }));               // no user
+	CHECK(Throws([] { ParseSettings(Parse(R"({"Database": {"Table": "x; DROP TABLE y"}})")); }));
+	CHECK(Throws([] { ParseSettings(Parse(R"({"Database": {"Name": "a`b"}})")); }));
+	CHECK(Throws([] { ParseSettings(Parse(R"({"Database": {"Port": 70000}})")); }));
+	CHECK(Throws([] { ParseSettings(Parse(R"({"Database": 5})")); }));
+	CHECK(Throws([] { ParseSettings(Parse(R"({"DatabaseRefresh_Seconds": 1})")); }));
+	CHECK(IsValidSqlName("hidden_skins_players") && !IsValidSqlName("") && !IsValidSqlName("a-b") && !IsValidSqlName(std::string(65, 'a')));
+	CHECK(SqlSelectPreferences("t1") == "SELECT `eos_id` FROM `t1`");
+	CHECK(SqlCreatePreferenceTable("t1").find("CREATE TABLE IF NOT EXISTS `t1`") == 0);
+	CHECK(SqlSetPreference("t1", "AAAA1111", true, "TheIsland").find("VALUES ('aaaa1111', 'TheIsland')") != std::string::npos);
+	CHECK(SqlSetPreference("t1", "AAAA1111", false, "") == "DELETE FROM `t1` WHERE `eos_id` = 'aaaa1111'");
+	CHECK(SqlSetPreference("t1", "aaaa1111", true, "Lost'Colony;--").find("'LostColony--'") != std::string::npos);
+	CHECK(Throws([] { SqlSetPreference("t1", "aa' OR 1=1", true, ""); }));
+	CHECK(Throws([] { SqlSelectPreferences("t 1"); }));
+}
+
 static void CheckShipped(const Settings& s)
 {
+	CHECK(!s.enable_player_hide_commands && !s.enable_player_strip);   // player commands ship switched off
+	CHECK(!s.preferences_in_database && s.db.user.empty() && s.db.password.empty());   // no credentials in the shipped config
+	CHECK(s.player_strip_cooldown_minutes == 30);
 	CHECK(s.probe_items);
 	CHECK(s.probe_players);
 	CHECK(s.probe_structure_messages);
@@ -435,6 +532,7 @@ int main(int argc, char** argv)
 	TestKeyCounter();
 	TestPlatform();
 	TestFormatting();
+	TestPlayerCommands();
 
 	if (argc >= 2)
 	{

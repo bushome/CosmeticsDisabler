@@ -31,6 +31,23 @@ namespace CosmeticsProbe
 	// Settings
 	// ------------------------------------------------------------------------------------------
 
+	// Where /hideskins choices are kept: a file per server, or a MariaDB/MySQL table shared by a cluster.
+	struct PreferenceDb
+	{
+		std::string host = "127.0.0.1";
+		int port = 3306;
+		std::string user;
+		std::string password;
+		std::string name = "cosmeticsdisabler";   // database (schema) name
+		std::string table = "hidden_skins_players";
+		bool ssl = false;                          // false = plain connection (local / LAN MariaDB without TLS)
+
+		bool operator==(const PreferenceDb& o) const
+		{
+			return host == o.host && port == o.port && user == o.user && password == o.password && name == o.name && table == o.table && ssl == o.ssl;
+		}
+	};
+
 	struct Settings
 	{
 		bool probe_items = true;                 // hook the item -> client net info builder
@@ -67,7 +84,29 @@ namespace CosmeticsProbe
 		int strip_on_map_load_delay_seconds = 120;
 		int strip_repeat_minutes = 0;            // strip again every N minutes after the first run (0 = never)
 		std::string block_skin_apply_message;    // told to the nearest player when a skin apply is refused ("" = silent)
+
+		// Player chat commands (off unless enabled). Command names include the slash, as typed in chat.
+		bool enable_player_hide_commands = false; // players opt themselves in and out of console-style skin hiding
+		std::string hide_skins_command = "/hideskins";
+		std::string show_skins_command = "/showskins";
+		bool enable_player_strip = false;        // a player strips the skins of their own tribe's structures (report, then confirm)
+		std::string strip_skins_command = "/stripskins";
+		int player_strip_cooldown_minutes = 30;  // per tribe, after a confirmed strip
+		bool preferences_in_database = false;    // PlayerPreferenceStorage: "File" (false) or "Database" (true)
+		PreferenceDb db;
+		int database_refresh_seconds = 30;       // how often the table is read again (picks up choices made on other servers)
 	};
+
+	// A database or table name used in SQL text without quoting tricks: letters, digits and underscores only.
+	inline bool IsValidSqlName(const std::string& name)
+	{
+		if (name.empty() || name.size() > 64)
+			return false;
+		for (unsigned char c : name)
+			if (!std::isalnum(c) && c != '_')
+				return false;
+		return true;
+	}
 
 	namespace detail
 	{
@@ -92,6 +131,42 @@ namespace CosmeticsProbe
 			if (raw < lo || raw > hi)
 				throw std::runtime_error(std::string(key) + " must be between " + std::to_string(lo) + " and " + std::to_string(hi));
 			return static_cast<int>(raw);
+		}
+
+		// A chat command: "/" followed by 1-30 letters, digits or underscores.
+		inline bool IsValidChatCommand(const std::string& name)
+		{
+			if (name.size() < 2 || name.size() > 31 || name[0] != '/')
+				return false;
+			for (size_t i = 1; i < name.size(); ++i)
+			{
+				const unsigned char c = static_cast<unsigned char>(name[i]);
+				if (!std::isalnum(c) && c != '_')
+					return false;
+			}
+			return true;
+		}
+
+		inline void ReadText(const nlohmann::json& root, const char* key, std::string& out, size_t max_len)
+		{
+			if (!root.contains(key))
+				return;
+			const auto& value = root.at(key);
+			if (!value.is_string())
+				throw std::runtime_error(std::string("Database.") + key + " must be text");
+			if (value.get<std::string>().size() > max_len)
+				throw std::runtime_error(std::string("Database.") + key + " is too long");
+			out = value.get<std::string>();
+		}
+
+		inline void ReadCommand(const nlohmann::json& root, const char* key, std::string& out)
+		{
+			if (!root.contains(key))
+				return;
+			const auto& value = root.at(key);
+			if (!value.is_string() || !IsValidChatCommand(value.get<std::string>()))
+				throw std::runtime_error(std::string(key) + " must be a slash and 1-30 letters, digits or underscores, e.g. /hideskins");
+			out = value.get<std::string>();
 		}
 	} // namespace detail
 
@@ -141,6 +216,40 @@ namespace CosmeticsProbe
 			if (s.block_skin_apply_message.size() > 300)
 				throw std::runtime_error("BlockSkinApplyMessage must be at most 300 characters");
 		}
+
+		s.enable_player_hide_commands = detail::ReadBool(root, "EnablePlayerHideCommands", s.enable_player_hide_commands);
+		s.enable_player_strip = detail::ReadBool(root, "EnablePlayerStrip", s.enable_player_strip);
+		s.player_strip_cooldown_minutes = detail::ReadInt(root, "PlayerStripCooldown_Minutes", s.player_strip_cooldown_minutes, 0, 1440);
+		detail::ReadCommand(root, "HideSkinsCommand", s.hide_skins_command);
+		detail::ReadCommand(root, "ShowSkinsCommand", s.show_skins_command);
+		detail::ReadCommand(root, "StripSkinsCommand", s.strip_skins_command);
+		s.database_refresh_seconds = detail::ReadInt(root, "DatabaseRefresh_Seconds", s.database_refresh_seconds, 5, 3600);
+		if (root.contains("PlayerPreferenceStorage"))
+		{
+			const auto& v = root.at("PlayerPreferenceStorage");
+			if (!v.is_string() || (v.get<std::string>() != "File" && v.get<std::string>() != "Database"))
+				throw std::runtime_error("PlayerPreferenceStorage must be \"File\" or \"Database\"");
+			s.preferences_in_database = v.get<std::string>() == "Database";
+		}
+		if (root.contains("Database"))
+		{
+			const auto& d = root.at("Database");
+			if (!d.is_object())
+				throw std::runtime_error("Database must be an object with Host, Port, User, Password, Name, Table, Ssl");
+			detail::ReadText(d, "Host", s.db.host, 255);
+			s.db.port = detail::ReadInt(d, "Port", s.db.port, 1, 65535);
+			detail::ReadText(d, "User", s.db.user, 128);
+			detail::ReadText(d, "Password", s.db.password, 256);
+			detail::ReadText(d, "Name", s.db.name, 64);
+			detail::ReadText(d, "Table", s.db.table, 64);
+			s.db.ssl = detail::ReadBool(d, "Ssl", s.db.ssl);
+			if (!IsValidSqlName(s.db.name))
+				throw std::runtime_error("Database.Name must be 1-64 letters, digits or underscores");
+			if (!IsValidSqlName(s.db.table))
+				throw std::runtime_error("Database.Table must be 1-64 letters, digits or underscores");
+		}
+		if (s.preferences_in_database && (s.db.host.empty() || s.db.user.empty()))
+			throw std::runtime_error("PlayerPreferenceStorage is \"Database\": set Database.Host and Database.User");
 
 		if (root.contains("StripMode"))
 		{
@@ -508,6 +617,154 @@ namespace CosmeticsProbe
 			if (ToLower(id) == wanted)
 				return true;
 		return false;
+	}
+
+	// Players who chose /hideskins: handled as console players, like TreatAsConsolePlayers, but kept by the plugin in a
+	// small file next to the config and changed by the player. EOS IDs are stored lower case.
+	class OptInList
+	{
+	public:
+		bool Contains(const std::string& eos_id) const
+		{
+			return !eos_id.empty() && std::find(ids_.begin(), ids_.end(), ToLower(eos_id)) != ids_.end();
+		}
+		// Returns true when the list changed.
+		bool Add(const std::string& eos_id)
+		{
+			if (!IsValidId(eos_id) || Contains(eos_id))
+				return false;
+			ids_.push_back(ToLower(eos_id));
+			return true;
+		}
+		bool Remove(const std::string& eos_id)
+		{
+			const auto found = std::find(ids_.begin(), ids_.end(), ToLower(eos_id));
+			if (found == ids_.end())
+				return false;
+			ids_.erase(found);
+			return true;
+		}
+		size_t Size() const { return ids_.size(); }
+		bool Empty() const { return ids_.empty(); }
+		void Clear() { ids_.clear(); }
+
+		nlohmann::json ToJson() const
+		{
+			nlohmann::json list = nlohmann::json::array();
+			for (const std::string& id : ids_)
+				list.push_back(id);
+			return nlohmann::json{ {"HiddenSkinsPlayers", list} };
+		}
+		// Bad entries are skipped; a file that is not the expected shape throws.
+		static OptInList FromJson(const nlohmann::json& root)
+		{
+			if (!root.is_object() || !root.contains("HiddenSkinsPlayers") || !root.at("HiddenSkinsPlayers").is_array())
+				throw std::runtime_error("expected {\"HiddenSkinsPlayers\": [ ... ]}");
+			OptInList out;
+			for (const auto& item : root.at("HiddenSkinsPlayers"))
+				if (item.is_string())
+					out.Add(item.get<std::string>());
+			return out;
+		}
+		static bool IsValidId(const std::string& id)
+		{
+			if (id.empty() || id.size() > 64)
+				return false;
+			for (unsigned char c : id)
+				if (!std::isalnum(c))
+					return false;
+			return true;
+		}
+
+	private:
+		std::vector<std::string> ids_;
+	};
+
+	inline bool IsTreatedAsConsole(const Settings& s, const OptInList& opted_in, const std::string& eos_id)
+	{
+		return IsTreatedAsConsole(s, eos_id) || (s.enable_player_hide_commands && opted_in.Contains(eos_id));
+	}
+
+	// The hide commands only change anything when the plugin blanks skins for console viewers at all.
+	inline bool ConsoleBlockingOn(const Settings& s)
+	{
+		return s.block_structure_skins_for_consoles || s.block_item_skins_for_consoles;
+	}
+
+	// Player strip: only structures of the caller's own team, and only a real player or tribe team.
+	inline bool InPlayerStripScope(int structure_team, int caller_team)
+	{
+		return caller_team >= kFirstPlayerTeam && structure_team == caller_team;
+	}
+
+	// Tribe id typed by an admin: digits only, a player or tribe team (>= 50000). Returns 0 when not valid.
+	inline int ParseTribeId(const std::string& text)
+	{
+		if (text.empty() || text.size() > 10)
+			return 0;
+		long long value = 0;
+		for (unsigned char c : text)
+		{
+			if (!std::isdigit(c))
+				return 0;
+			value = value * 10 + (c - '0');
+		}
+		return value >= kFirstPlayerTeam && value <= INT32_MAX ? static_cast<int>(value) : 0;
+	}
+
+	// Minutes left before the tribe may strip again (0 = allowed now). Times are seconds.
+	inline int CooldownMinutesLeft(long long now_seconds, long long last_seconds, int cooldown_minutes)
+	{
+		if (cooldown_minutes <= 0 || last_seconds <= 0)
+			return 0;
+		const long long left = last_seconds + cooldown_minutes * 60LL - now_seconds;
+		return left <= 0 ? 0 : static_cast<int>((left + 59) / 60);
+	}
+
+	// A confirmed strip needs this tribe's report from at most this many seconds ago.
+	constexpr long long kPlayerStripReportValidSeconds = 600;
+	inline bool PlayerReportStillValid(long long now_seconds, long long report_seconds)
+	{
+		return report_seconds > 0 && now_seconds - report_seconds <= kPlayerStripReportValidSeconds;
+	}
+
+	inline std::string TribeBackupName(int team, long long epoch_seconds)
+	{
+		return "strip-tribe" + std::to_string(team) + "-" + std::to_string(epoch_seconds) + ".jsonl";
+	}
+
+	// SQL for the shared preference table. Table names pass IsValidSqlName and EOS IDs pass OptInList::IsValidId
+	// (letters and digits), so the text needs no escaping; the builders refuse anything else.
+	inline std::string SqlCreatePreferenceTable(const std::string& table)
+	{
+		if (!IsValidSqlName(table))
+			throw std::runtime_error("bad table name");
+		return "CREATE TABLE IF NOT EXISTS `" + table + "` ("
+			"`eos_id` VARCHAR(64) NOT NULL PRIMARY KEY, "
+			"`changed_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+			"`changed_on` VARCHAR(64) NOT NULL DEFAULT ''"
+			") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+	}
+
+	inline std::string SqlSelectPreferences(const std::string& table)
+	{
+		if (!IsValidSqlName(table))
+			throw std::runtime_error("bad table name");
+		return "SELECT `eos_id` FROM `" + table + "`";
+	}
+
+	inline std::string SqlSetPreference(const std::string& table, const std::string& eos_id, bool hide, const std::string& server)
+	{
+		if (!IsValidSqlName(table) || !OptInList::IsValidId(eos_id))
+			throw std::runtime_error("bad table name or EOS ID");
+		std::string where;   // server label: keep letters, digits, - and _ only
+		for (unsigned char c : server.substr(0, 64))
+			if (std::isalnum(c) || c == '-' || c == '_')
+				where.push_back(static_cast<char>(c));
+		if (hide)
+			return "INSERT INTO `" + table + "` (`eos_id`, `changed_on`) VALUES ('" + ToLower(eos_id) + "', '" + where
+				+ "') ON DUPLICATE KEY UPDATE `changed_at` = CURRENT_TIMESTAMP, `changed_on` = VALUES(`changed_on`)";
+		return "DELETE FROM `" + table + "` WHERE `eos_id` = '" + ToLower(eos_id) + "'";
 	}
 
 	inline PlatformGroup EffectiveGroup(int platform, bool treated_as_console)

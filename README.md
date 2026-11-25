@@ -18,7 +18,7 @@ cosmetics) from reaching clients, to stop the crashes that come with downloading
 players are hit hardest), plus an optional admin command to strip cosmetics off everything without removing the
 item, structure or creature they are on.
 
-**Status: 0.5.1 (test servers only).** Probe logging of what cosmetic data goes to clients; a dry-run-first, backed-up
+**Status: 0.6.0 (test servers only).** Probe logging of what cosmetic data goes to clients; a dry-run-first, backed-up
 Strip / Restore for structure skins (off until `EnableStrip` is set); item skin strips on entry (transmitter, vault,
 obelisk, drops) and on load from the save, with a backup file; an apply guard for structures and items; and an
 item data filter. Player hair / eyebrow / facial hair cosmetics are not handled yet.
