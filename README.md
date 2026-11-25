@@ -18,12 +18,13 @@ cosmetics) from reaching clients, to stop the crashes that come with downloading
 players are hit hardest), plus an optional admin command to strip cosmetics off everything without removing the
 item, structure or creature they are on.
 
-**Status: 0.6.0.** Console players get no structure or item skins by default (PC players keep theirs; nothing on the
+**Status: 0.61.** Console players get no structure or item skins by default (PC players keep theirs; nothing on the
 server changes); structure blocking is verified on Xbox Series X, Series S and PS5, item blocking so far with PC players
-handled as consoles. Opt-in `/hideskins` for PC players (file or MariaDB storage shared across a cluster). Report-first,
-backed-up structure strips for the whole map, one tribe (admin) or your own tribe (`/stripskins`), all undoable with
-`Restore`. Item skin strips on entry and on load, an apply guard and an item data filter, all off by default. Player
-hair / eyebrow / facial hair cosmetics are not handled yet.
+handled as consoles. Added in 0.61, per platform blocking list to add blocking granularity. Opt-in `/hideskins` for 
+PC players (file or MariaDB storage shared across a cluster). Report-first, backed-up structure strips for the whole
+map, one tribe (admin) or your own tribe (`/stripskins`), all undoable with `Restore`. Item skin strips on entry 
+and on load, an apply guard and an item data filter, all off by default. Player hair / eyebrow / facial hair 
+cosmetics are not handled yet.
 
 | Folder | Game | Server API (submodule) |
 |---|---|---|
