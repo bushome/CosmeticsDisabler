@@ -149,7 +149,7 @@
   "ScanActorsPerTick": 20000,
 
   // Off by default. Blanks the skin in the item data before the game builds an item from saved or transferred data:
-  // items restored by LogoutVaults, moved between inventories, dropped and picked up. The item is created without the
+  // items restored by a plugin from stored data, moved between inventories, dropped and picked up. The item is created without the
   // skin, so a weapon keeps its normal model. Items that are already in the world stay as they are until they are moved.
   // It follows StripMode and AllowSkinClasses. The server keeps no copy of the removed skin, so test it on a test server.
   "StripItemsOnEntry": false,

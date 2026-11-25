@@ -41,7 +41,7 @@ window show examples.
 
 | Route | Switch | How |
 |---|---|---|
-| Transmitter, vault restore (LogoutVaults), obelisk / ARK Data, dropped or moved items | `StripItemsOnEntry` | `InitFromNetInfo`: the skin is blanked in the item data before the game builds the item |
+| Transmitter, items restored by a plugin from stored data, obelisk / ARK Data, dropped or moved items | `StripItemsOnEntry` | `InitFromNetInfo`: the skin is blanked in the item data before the game builds the item |
 | Items loaded from the saved map (storage, vaults, crafting stations, a player's own inventory after a restart) | `StripSavedItems` | `InventoryLoadedFromSaveGame`, then the game's own `ServerRemoveItemSkinOnly`; only when the owner's team is a player or tribe (50000 and up). A mod cosmetic is a mod id on the item with no skin class; it is cleared directly (mod id and variant set to 0) |
 | A player applies a skin from the cosmetics tab | `BlockSkinApply` | `UseItemOntoItem` returns false and the player gets `BlockSkinApplyMessage` |
 | Item data on its way to a client | `FilterItems` | skin blanked in the client copy only |
@@ -104,7 +104,7 @@ A command refused because `EnableStrip` is false says so in the reply and writes
 | `FilterItemCustomData` | `false` | **experimental**: also clear the custom item data on the client copy of filtered items |
 | `BackupStrippedItems` | `true` | record every removed item skin in `backups/items-<time>.jsonl` before removing it; if the file cannot be written nothing is removed |
 | `StripSavedItems` | `false` | remove the skin (the game's own removal call) from player- and tribe-owned items (team 50000 and up; NPC gear is skipped) as they are rebuilt from the save at map load; the item stays and a weapon returns to its normal model; changes saved data, test first |
-| `StripItemsOnEntry` | `false` | blank the skin in item data before the game builds an item from saved or transferred data (LogoutVaults restores, inventory moves, drops); items already in the world are unchanged until moved |
+| `StripItemsOnEntry` | `false` | blank the skin in item data before the game builds an item from saved or transferred data (plugin restores, inventory moves, drops); items already in the world are unchanged until moved |
 | `BlockSkinApply` | `false` | refuse new structure skins and new item skins (applied from the cosmetics tab) that `StripMode` would strip; removing a skin is always allowed |
 | `BlockSkinApplyMessage` | `""` | message sent when `BlockSkinApply` refuses a skin: to the player who tried to apply an item skin; for a structure skin to the player standing nearest the structure (within 30 m, at most once per 5 s each), because the server cannot tell who clicked; empty = silent |
 | `StripOnMapLoad` | `false` | run the structure strip automatically after the map has loaded (needs `EnableStrip`) |
