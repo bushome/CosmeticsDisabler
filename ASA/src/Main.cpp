@@ -2037,7 +2037,7 @@ void Hook_AShooterPlayerController_ClientAddActorItem(AShooterPlayerController* 
 			{
 				const ConnectionInfo ci = InfoFor(connection);
 				viewer = ConnectionLabel(ci);
-				console = EffectiveGroup(ci.platform, ci.test_console) != PlatformGroup::PC;
+				console = IsBlockedPlatform(g_settings, ci.platform, ci.test_console);
 			}
 			const long long net_mod_id = NetModSkinId(&info);
 			if (console && (info.ItemSkinTemplateField().uClass != nullptr || net_mod_id != 0))
@@ -2125,7 +2125,7 @@ void Hook_UPrimalInventoryComponent_ServerRequestItems(UPrimalInventoryComponent
 			{
 				const ConnectionInfo info = InfoFor(connection);
 				viewer = ConnectionLabel(info);
-				console = EffectiveGroup(info.platform, info.test_console) != PlatformGroup::PC;
+				console = IsBlockedPlatform(g_settings, info.platform, info.test_console);
 			}
 			else
 				viewer = "no connection";
@@ -2288,7 +2288,7 @@ __int64 Hook_UActorChannel_ReplicateActor(UActorChannel* channel)
 						ConnectionInfo winfo_conn;
 						if (connection != nullptr)
 							winfo_conn = InfoFor(connection);
-						if (EffectiveGroup(winfo_conn.platform, winfo_conn.test_console) != PlatformGroup::PC)
+						if (IsBlockedPlatform(g_settings, winfo_conn.platform, winfo_conn.test_console))
 						{
 							weapon_info = winfo;
 							weapon_saved_skin = wskin;
@@ -2328,7 +2328,7 @@ __int64 Hook_UActorChannel_ReplicateActor(UActorChannel* channel)
 						info = InfoFor(connection);
 					pair_connection = reinterpret_cast<uintptr_t>(connection);
 					pair_actor = reinterpret_cast<uintptr_t>(actor);
-					const bool is_console = EffectiveGroup(info.platform, info.test_console) != PlatformGroup::PC;
+					const bool is_console = IsBlockedPlatform(g_settings, info.platform, info.test_console);
 					bool defer = false;
 					if (!is_console && g_settings.defer_structure_skins_seconds > 0 && connection != nullptr)
 					{
@@ -2446,7 +2446,7 @@ void Hook_UNetDriver_ProcessRemoteFunctionForChannelPrivate(void* driver, UActor
 		if (!name.empty())
 		{
 			const ConnectionInfo info = InfoFor(connection);
-			if (EffectiveGroup(info.platform, info.test_console) != PlatformGroup::PC)
+			if (IsBlockedPlatform(g_settings, info.platform, info.test_console))
 				g_counters.console_rpcs.Add(name + " on " + ClassNameOfObject(target));
 		}
 	}
@@ -2454,7 +2454,7 @@ void Hook_UNetDriver_ProcessRemoteFunctionForChannelPrivate(void* driver, UActor
 		&& std::this_thread::get_id() == g_game_thread && IsSkinMulticast(function))
 	{
 		const ConnectionInfo info = InfoFor(connection);
-		if (EffectiveGroup(info.platform, info.test_console) != PlatformGroup::PC)
+		if (IsBlockedPlatform(g_settings, info.platform, info.test_console))
 		{
 			++g_counters.skin_rpc_withheld;
 			if (g_budget.Take())

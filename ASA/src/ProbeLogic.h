@@ -65,6 +65,8 @@ namespace CosmeticsProbe
 		bool unequip_skin_items_for_consoles = true;  // EXPERIMENTAL: equipped skin items (bIsItemSkin) are sent to console viewers as not equipped
 		bool probe_client_rpcs = false;          // count remote functions sent to console connections whose name mentions items/skins/cosmetics/equipment (probe)
 		bool probe_item_requests = false;        // hook UPrimalInventoryComponent::ServerRequestItems: who asks for items, equipped gear or not (probe only)
+		std::vector<int> block_skins_for_platforms = {3, 4, 5}; // connection platform values that get no skins (3 Series X, 4 Series S, 5 PS5)
+		bool block_skins_for_unknown_platforms = true;          // platform values that are not 1, 3, 4 or 5 (2, 6, others, unread) get no skins either
 		std::vector<std::string> treat_as_console_players; // testing: EOS IDs whose connection counts as a console
 		int summary_interval_seconds = 30;       // how often the counters are written to the log
 		int max_detail_lines_per_summary = 50;   // cap on individual "seen one" log lines per summary window
@@ -206,6 +208,22 @@ namespace CosmeticsProbe
 		s.probe_client_rpcs = detail::ReadBool(root, "ProbeClientRpcs", s.probe_client_rpcs);
 		s.unequip_skin_items_for_consoles = detail::ReadBool(root, "UnequipSkinItemsForConsoles", s.unequip_skin_items_for_consoles);
 		s.block_item_skins_for_consoles = detail::ReadBool(root, "BlockItemSkinsForConsoles", s.block_item_skins_for_consoles);
+		if (root.contains("BlockSkinsForPlatforms"))
+		{
+			const auto& list = root.at("BlockSkinsForPlatforms");
+			if (!list.is_array())
+				throw std::runtime_error("BlockSkinsForPlatforms must be a list of numbers, e.g. [3, 4, 5]");
+			s.block_skins_for_platforms.clear();
+			for (const auto& v : list)
+			{
+				if (!v.is_number_integer() || v.get<long long>() < 0 || v.get<long long>() > 255)
+					throw std::runtime_error("BlockSkinsForPlatforms entries must be whole numbers from 0 to 255");
+				const int value = v.get<int>();
+				if (std::find(s.block_skins_for_platforms.begin(), s.block_skins_for_platforms.end(), value) == s.block_skins_for_platforms.end())
+					s.block_skins_for_platforms.push_back(value);
+			}
+		}
+		s.block_skins_for_unknown_platforms = detail::ReadBool(root, "BlockSkinsForUnknownPlatforms", s.block_skins_for_unknown_platforms);
 		s.summary_interval_seconds = detail::ReadInt(root, "SummaryInterval_Seconds", s.summary_interval_seconds, 5, 3600);
 		s.max_detail_lines_per_summary = detail::ReadInt(root, "MaxDetailLinesPerSummary", s.max_detail_lines_per_summary, 0, 1000);
 		s.scan_actors_per_tick = detail::ReadInt(root, "ScanActorsPerTick", s.scan_actors_per_tick, 100, 1000000);
@@ -784,6 +802,21 @@ namespace CosmeticsProbe
 	inline PlatformGroup EffectiveGroup(int platform, bool treated_as_console)
 	{
 		return treated_as_console ? PlatformGroup::Console : GroupOfPlatform(platform);
+	}
+
+	// True when a connection gets no skins. A player in TreatAsConsolePlayers / opted in with /hideskins is always blocked.
+	// Otherwise the platform value decides: listed in BlockSkinsForPlatforms = blocked; 1, 3, 4 and 5 not listed = shown;
+	// any other value (2, 6, unset, unread = -1) follows BlockSkinsForUnknownPlatforms. Platform 1 (PC) is only blocked
+	// if the operator lists it.
+	inline bool IsBlockedPlatform(const Settings& s, int platform, bool treated_as_console)
+	{
+		if (treated_as_console)
+			return true;
+		if (std::find(s.block_skins_for_platforms.begin(), s.block_skins_for_platforms.end(), platform) != s.block_skins_for_platforms.end())
+			return true;
+		if (platform == 1 || platform == 3 || platform == 4 || platform == 5)
+			return false;
+		return s.block_skins_for_unknown_platforms;
 	}
 
 	inline std::string ConnectionPlatformLabel(int platform)

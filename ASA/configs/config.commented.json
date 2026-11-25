@@ -137,6 +137,16 @@
   // between logins. Changes nothing.
   "ProbeUnlockedCosmetics": false,
 
+  // Which connection platforms get no skins (structures, items and skin-change messages). Default [3, 4, 5]: Xbox Series X,
+  // Xbox Series S, PS5. Measured on real consoles: 1 PC (GeForce Now too), 3 Series X, 4 Series S, 5 PS5. To block only the
+  // Series S: [4]. [] blocks no listed platform. Entries are whole numbers 0 - 255; listing 1 would hide skins from PC players.
+  // Needs ReadConnectionPlatform. TreatAsConsolePlayers and /hideskins players are blocked whatever this says.
+  "BlockSkinsForPlatforms": [3, 4, 5],
+
+  // What to do with a platform value that is not 1, 3, 4 or 5 and not listed above: 2, 6, 0 (unset), anything new, or a
+  // value that could not be read. true (default) = no skins, the safe choice; false = those connections see skins.
+  "BlockSkinsForUnknownPlatforms": true,
+
   // Read UNetConnection::ConnectionPlatform (one byte) for each character's player and log it next to
   // the crossplay platform. Seen values (test server, real consoles): 1 PC (GeForce Now too), 3 Xbox Series X, 4 Xbox Series S, 5 PS5 slim, 2 / 6 unconfirmed.
   // Turn off if this ever misbehaves on your build.

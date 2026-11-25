@@ -123,6 +123,31 @@ static void TestSettings()
 		try { ParseSettings(Parse(R"({"TreatAsConsolePlayers": "abc"})")); } catch (const std::exception&) { threw = true; }
 		CHECK(threw);
 	}
+	{
+		// BlockSkinsForPlatforms / BlockSkinsForUnknownPlatforms
+		const Settings def;
+		CHECK(!IsBlockedPlatform(def, 1, false));
+		CHECK(IsBlockedPlatform(def, 3, false) && IsBlockedPlatform(def, 4, false) && IsBlockedPlatform(def, 5, false));
+		CHECK(IsBlockedPlatform(def, 2, false) && IsBlockedPlatform(def, 6, false) && IsBlockedPlatform(def, 0, false) && IsBlockedPlatform(def, -1, false));
+		CHECK(IsBlockedPlatform(def, 1, true));                       // test / opt-in override always blocks
+		const Settings only_s = ParseSettings(Parse(R"({"BlockSkinsForPlatforms": [4], "BlockSkinsForUnknownPlatforms": false})"));
+		CHECK(IsBlockedPlatform(only_s, 4, false));
+		CHECK(!IsBlockedPlatform(only_s, 3, false) && !IsBlockedPlatform(only_s, 5, false) && !IsBlockedPlatform(only_s, 1, false));
+		CHECK(!IsBlockedPlatform(only_s, 2, false) && !IsBlockedPlatform(only_s, 6, false) && !IsBlockedPlatform(only_s, -1, false));
+		CHECK(IsBlockedPlatform(only_s, 3, true));
+		const Settings s_unknown = ParseSettings(Parse(R"({"BlockSkinsForPlatforms": [4]})"));
+		CHECK(IsBlockedPlatform(s_unknown, 2, false) && IsBlockedPlatform(s_unknown, 6, false) && IsBlockedPlatform(s_unknown, -1, false) && !IsBlockedPlatform(s_unknown, 5, false));
+		const Settings listed_two = ParseSettings(Parse(R"({"BlockSkinsForPlatforms": [2, 4, 4], "BlockSkinsForUnknownPlatforms": false})"));
+		CHECK(listed_two.block_skins_for_platforms.size() == 2 && IsBlockedPlatform(listed_two, 2, false) && !IsBlockedPlatform(listed_two, 6, false));
+		const Settings empty_list = ParseSettings(Parse(R"({"BlockSkinsForPlatforms": [], "BlockSkinsForUnknownPlatforms": false})"));
+		CHECK(!IsBlockedPlatform(empty_list, 4, false));
+		for (const char* bad : {R"({"BlockSkinsForPlatforms": 4})", R"({"BlockSkinsForPlatforms": ["4"]})", R"({"BlockSkinsForPlatforms": [256]})", R"({"BlockSkinsForPlatforms": [-1]})", R"({"BlockSkinsForPlatforms": [4.5]})", R"({"BlockSkinsForUnknownPlatforms": "yes"})"})
+		{
+			bool threw = false;
+			try { ParseSettings(Parse(bad)); } catch (const std::exception&) { threw = true; }
+			CHECK(threw);
+		}
+	}
 	CHECK(GroupOfPlatform(0) == PlatformGroup::Unknown && GroupOfPlatform(6) == PlatformGroup::Unknown && GroupOfPlatform(-1) == PlatformGroup::Unknown);
 	CHECK(d.read_connection_platform);
 	CHECK(d.summary_interval_seconds == 30);
