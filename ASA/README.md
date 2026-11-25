@@ -5,15 +5,22 @@ which stops the crashes and slow base loading they cause, mostly on consoles. Sk
 the structure or item; the structure or item stays. Skins stay unlocked on the player's account, so they can be
 applied again once the plugin is off.
 
-Everything is off or observe-only by default. The plugin changes game data in four ways, each with its own switch:
+Out of the box it does one thing: **console players get no skins**. `BlockStructureSkinsForConsoles`,
+`BlockItemSkinsForConsoles` and `UnequipSkinItemsForConsoles` ship on. They blank skins only in the data sent to console
+connections; PC players keep every skin, and nothing changes on the server's structures or items. A PC player who
+crashes or lags on skins can opt in to the same treatment with `/hideskins` (off by default).
+
+Everything that changes game data is off by default and has its own switch:
 
 - the structure **Strip** command (`EnableStrip`; always starts as a dry run; backup first; `Restore` puts skins back),
+- the per-tribe strips: admin `StripTribe` (needs `EnableStrip`) and player `/stripskins` (`EnablePlayerStrip`), both
+  report first, back up, and can be undone with `Restore`,
 - the item strips `StripItemsOnEntry` and `StripSavedItems` (backup first, `BackupStrippedItems`),
 - the apply guard `BlockSkinApply` (refuses new skins),
-- `FilterItems` (blanks the skin in item data sent to clients only; the server item is untouched).
+- `FilterItems` (blanks the skin in item data sent to every client; the server item is untouched).
 
-All other hooks call the original game function first and then only read values and count. Run it on a test
-server (full live mod and plugin loadout, with a PC client and a console client connected) before a live map.
+The probes (`Probe...` switches) only count and log, and all ship off. Run a new version on a test server (full live mod
+and plugin loadout, with a PC client and, if you can, a console client connected) before a live map.
 
 ## What it logs
 
@@ -26,8 +33,9 @@ server (full live mod and plugin loadout, with a PC client and a console client 
 | `UActorChannel.ReplicateActor()` (with `ProbeStructureChannels`) | skinned structures sent to each connection, by connection platform; distinct connection/structure pairs; time spent in the call |
 | `UPrimalItem.InventoryLoadedFromSaveGame` (with `ProbeItemEntry` or `StripSavedItems`) | items loaded from the save with a skin, their owner class and team, and how many were stripped |
 
-A summary is written to the plugin log every `SummaryInterval_Seconds`; up to `MaxDetailLinesPerSummary`
-individual lines per window show examples.
+Each row needs its `Probe...` switch on (all off by default); they are for test servers and troubleshooting. A summary
+is written to the plugin log every `SummaryInterval_Seconds`; up to `MaxDetailLinesPerSummary` individual lines per
+window show examples.
 
 ## Item skins: where they are removed
 
@@ -59,10 +67,12 @@ Things to know:
 | `CosmeticsDisabler.Scan` | counts structures with an official or custom skin (class names, skin ids); done a slice per second, the result goes to the log |
 | `CosmeticsDisabler.Strip` | **dry run**: reports what would be stripped, changes nothing |
 | `CosmeticsDisabler.Strip confirm` | strips structure skins. Needs `EnableStrip: true` and a finished dry run since the server started. Each change is first written to `ArkApi/Plugins/CosmeticsDisabler/backups/strip-<time>.jsonl`. The structures themselves stay |
-| `CosmeticsDisabler.Restore [file]` | puts the skins from a backup file back; without a file it lists backups. Structures that have a skin again, or no longer exist, are skipped |
+| `CosmeticsDisabler.Restore [file]` | puts the skins from a backup file back (any `strip-*.jsonl`, including player and tribe strips); without a file it lists backups. Needs `EnableStrip: true`. Structures that have a skin again, or no longer exist, are skipped |
 | `CosmeticsDisabler.StripTribe <tribe id> [confirm]` | without `confirm`: **report** of how many of that tribe's structures on this map have a skin (changes nothing). With `confirm` (within 10 minutes of a report that found skins; needs `EnableStrip`): removes every skin from that tribe's structures, the structures stay. Backup `backups/strip-tribe<id>-<time>.jsonl`, undo with `Restore`. No cooldown. From the console the result is also sent to the admin in chat; from RCON it goes to the log |
 | `CosmeticsDisabler.Status` | writes the current counters to the log and replies with a one-line summary |
 | `CosmeticsDisabler.Reload` | re-reads `config.json` |
+
+A command refused because `EnableStrip` is false says so in the reply and writes a warning to the plugin log.
 
 ## Config (`ArkApi/Plugins/CosmeticsDisabler/config.json`)
 
@@ -86,7 +96,7 @@ Things to know:
 | `SummaryInterval_Seconds` | `30` | seconds between summaries (5 - 3600) |
 | `MaxDetailLinesPerSummary` | `50` | cap on example lines per summary (0 - 1000) |
 | `ScanActorsPerTick` | `20000` | actors Scan / Strip check per second (100 - 1000000) |
-| `EnableStrip` | `false` | master switch for `Strip confirm` and `Restore` |
+| `EnableStrip` | `false` | master switch for `Strip confirm`, `StripTribe confirm`, `Restore` and `StripOnMapLoad`; not needed for `/stripskins` |
 | `StripMode` | `All` | `All` strips custom and official structure skins; `CustomOnly` strips custom cosmetics only |
 | `AllowSkinClasses` | `[]` | skin class names never stripped (case-insensitive; names as printed by Scan) |
 | `StripPerTick` | `50` | structures changed per second (1 - 1000) |
@@ -100,7 +110,7 @@ Things to know:
 | `StripOnMapLoad` | `false` | run the structure strip automatically after the map has loaded (needs `EnableStrip`) |
 | `StripOnMapLoadDelay_Seconds` | `120` | wait after startup before that automatic strip (10 - 3600) |
 | `StripRepeat_Minutes` | `0` | repeat the automatic strip every N minutes (0 = once); catches cells that stream in later |
-| `EnablePlayerHideCommands` | `false` | players can type `/hideskins` to be handled like a console player and `/showskins` to go back (relog each time); kept in `hidden_skins_players.json`; only does something while `BlockItemSkinsForConsoles` or `BlockStructureSkinsForConsoles` is on. Needs a restart to switch on |
+| `EnablePlayerHideCommands` | `false` | players can type `/hideskins` to be handled like a console player and `/showskins` to go back (relog each time); kept by EOS ID in a file or a database (`PlayerPreferenceStorage`); only does something while `BlockItemSkinsForConsoles` or `BlockStructureSkinsForConsoles` is on. Needs a restart to switch on |
 | `HideSkinsCommand`, `ShowSkinsCommand` | `/hideskins`, `/showskins` | chat command names (a slash and up to 30 letters, digits or underscores) |
 | `EnablePlayerStrip` | `false` | any tribe member can report (`/stripskins`) and then strip (`/stripskins confirm`) the skins on their own tribe's structures on this map. Does not need `EnableStrip`. Needs a restart to switch on |
 | `StripSkinsCommand` | `/stripskins` | chat command name |
@@ -120,44 +130,52 @@ Strip needs the structure skin class fields (`ReplicatedStructureMySkinClass`, `
 not in the AsaApi headers and are read by name. On a first run, check that Scan's official/custom counts look
 right (and that its sanity line `HasAppliedCustomCosmetic check` shows 0 mismatches) before any `Strip confirm`.
 
-`config.commented.json` holds the same values with comments. A bad config logs an error and keeps the previous
-settings; it never stops the plugin from loading.
+`config.commented.json` holds the same values with comments. A key left out of `config.json` takes the default shown
+above. A bad config never stops the plugin from loading: at startup it runs on safe fallback settings (see
+Troubleshooting), and a failed `Reload` keeps the settings it already had. Updating keeps your existing `config.json`,
+so compare it with the new one: a key you already have keeps your value.
 
 ## Player commands
 
-Both are off by default and registered at server start. They are chat commands, so they work on any map; the player's own
-EOS ID and tribe come from the game.
+All three are off by default and registered at server start (switching one on or renaming it needs a restart). They are
+chat commands; the player's EOS ID and tribe come from the game.
 
 **`/hideskins` and `/showskins`** (`EnablePlayerHideCommands`). The player opts in or out of being handled like a console
-player, for people who crash or lag with skins on PC. The choice is stored by EOS ID. It takes effect at the next
-login: the platform of a connection is read once per connection, and entries of connections that are gone are dropped
-every few seconds so a returning player is read again.
+player, for people who crash or lag with skins on PC. The choice is stored by EOS ID and takes effect at the next login:
+the platform of a connection is read once per connection, and entries of connections that are gone are dropped every few
+seconds so a returning player is read again. It does nothing while both `BlockItemSkinsForConsoles` and
+`BlockStructureSkinsForConsoles` are off, and the command says so.
 
 - `PlayerPreferenceStorage: "File"` keeps the list in `ArkApi/Plugins/CosmeticsDisabler/hidden_skins_players.json`
-  (written to a temp file and renamed). One server only.
+  (written to a temp file and renamed). One server only. `CosmeticsDisabler.Reload` re-reads it.
 - `PlayerPreferenceStorage: "Database"` keeps it in a MariaDB / MySQL table that every server of the cluster points at, so
   the choice follows the player to every map. The table (`eos_id`, `changed_at`, `changed_on` = the map it was set on) is
   created on first start; the schema in `Database.Name` must exist and the user needs CREATE once, then SELECT, INSERT,
   UPDATE and DELETE. Each server reads the whole table (only opted-in players are in it) at startup and every
   `DatabaseRefresh_Seconds`; a choice made on another map is picked up by the next read, so a player who switches maps
   within that time may need one more relog. All queries run on a background thread, so the game never waits for the
-  database. The player is told "Saving your choice..." and then, once the database has it, to relog; if the save fails
-  the change is undone and the player is told to try again. If the database is down, the server keeps the last list it
-  read and logs the error once until it works again.
- It does nothing while both `BlockItemSkinsForConsoles` and
-`BlockStructureSkinsForConsoles` are off, and the command says so. `CosmeticsDisabler.Reload` re-reads the file.
-
-Admins can do the same for any tribe with `CosmeticsDisabler.StripTribe <tribe id>` (see Commands).
+  database.
+  - The player is told "Saving your choice..." and then, once the database has it, to relog. If the save fails the
+    change is undone and the player is told it could not be saved.
+  - If the database is down, the server keeps the last list it read, logs the error (retrying every
+    `DatabaseRefresh_Seconds`) and logs `working again` once it recovers. If the table was never read since startup,
+    the commands ask the player to try again in a minute.
 
 **`/stripskins`** (`EnablePlayerStrip`). Any tribe member (or an untribed player, for their own structures) types
 `/stripskins` for a report: how many of their tribe's structures on this map have a skin, custom and official. It changes
-nothing. Within 10 minutes, `/stripskins confirm` removes them; every change is first written to
-`backups/strip-tribe<id>-<time>.jsonl`, and an admin can put them back with `CosmeticsDisabler.Restore <file>` (that needs `EnableStrip`). The
-structures stay. Only structures whose team equals the caller's team are looked at, `StripMode` is ignored (every skin kind
-goes) and `AllowSkinClasses` still protects its classes. One run at a time on the server (a player asking during an
-admin run or another player's run is told to try again), and each tribe waits `PlayerStripCooldown_Minutes` after a
-confirmed strip. Each map is its own server process, so a tribe with bases on several maps runs it on each. Progress
-and results are sent to the player in chat and written to the log.
+nothing. Within 10 minutes, `/stripskins confirm` removes them. Players see the skins disappear as it runs; no relog is
+needed.
+
+- Every change is first written to `backups/strip-tribe<id>-<time>.jsonl`, and an admin can put the skins back with
+  `CosmeticsDisabler.Restore <file>` (that needs `EnableStrip`). Players cannot undo it themselves.
+- The structures stay. Only structures whose team equals the caller's team are looked at, `StripMode` is ignored (every
+  skin kind goes, official and custom) and `AllowSkinClasses` still protects its classes.
+- One run at a time on the server (a player asking during an admin run or another player's run is told to try again), and
+  each tribe waits `PlayerStripCooldown_Minutes` after a confirmed strip.
+- Each map is its own server process, so a tribe with bases on several maps runs it on each. Progress and results are
+  sent to the player in chat and written to the log.
+
+Admins can do the same for any tribe with `CosmeticsDisabler.StripTribe <tribe id>` (see Commands); it has no cooldown.
 
 ## Build
 
@@ -171,23 +189,41 @@ set by a `Directory.Build.props` above the repo, as on the dev machine) and fall
 3. Output: `out\CosmeticsDisabler.dll` (plus `.dll.arkapi` for hot reload) and the ready-to-copy folder
    `out\CosmeticsDisabler\`.
 
-vcpkg (bundled with Visual Studio) restores `fmt` automatically in manifest mode.
+vcpkg (bundled with Visual Studio) restores `fmt` and `libmariadb` automatically in manifest mode. The first build
+downloads and builds `libmariadb`, so it takes a few minutes longer.
 
 ## Install
 
 Copy the `out\CosmeticsDisabler\` folder to `ShooterGame\Binaries\Win64\ArkApi\Plugins\` on the server. It needs
-no other plugin. The server needs the Visual C++ runtime that AsaApi itself requires (see the ASABinaries repo). The MariaDB client library is linked into the DLL, so a database needs no extra files on the server.
+no other plugin. The server needs the Visual C++ runtime that AsaApi itself requires (see the ASABinaries repo). The
+MariaDB client library is linked into the DLL, so a database needs no extra files on the server.
+
+The startup line `CosmeticsDisabler 0.6.0 loaded: ...` confirms the version. When updating, compare your `config.json`
+with the new one (see Config).
 
 ## What to look for
 
-1. Do `GetItemNetInfo(true)` counters move when a player opens an inventory with a cosmetic in it? (`items with skin` > 0)
-2. Does the `connection=` value match each tester's device (PC 1, PS5 3, Xbox Series 4) while `crossplay=` stays `Unknown`?
-3. After applying a skin to a structure, does a `structure skin message` line appear?
-4. Run `CosmeticsDisabler.Scan` and compare the number of structures with a cosmetic against what you expect.
-5. With the item strips on and `ProbeItemEntry` on, a skinned item from a transmitter or obelisk shows
-   `InitFromNetInfo ... removed=yes`, and one from the save shows `item loaded from save: ... removed=yes` with
-   `weaponTemplate` back to the plain class. Patrol Thralls should show no `removed=yes`.
-6. Is the server tick time affected? The hooks only count; watch the usual performance numbers.
+On a first install:
+
+1. The startup log shows `CosmeticsDisabler 0.6.0 loaded` and `Hooks: ... ok` for every hook (see Troubleshooting if one
+   says `FAILED`).
+2. A console player near skinned structures sees them plain, and a PC player sees the skins. To see it in the log,
+   switch `ProbeStructureChannels` on for a while: its summary line shows `blanked for console` above 0 while a console
+   player is near skinned structures. Switch it off again afterwards.
+3. Before any strip, run `CosmeticsDisabler.Scan` and check the official/custom counts look right and the
+   `HasAppliedCustomCosmetic check` line shows 0 mismatches.
+4. Watch the usual server performance numbers for a day. The console blocking hooks run for every replicated actor on
+   every connection; on a live map (Astraeos) the 0.6.0 build showed no hitches of its own.
+
+With the probes on (test servers):
+
+- `ProbePlayers`: does each tester's `connection=` value match their device (1 PC, 3 Xbox Series X, 4 Xbox Series S,
+  5 PS5)? `crossplay=` usually stays `Unknown`.
+- `ProbeItems`: do the `items with skin` counters move when a player opens an inventory with a cosmetic in it?
+- `ProbeStructureMessages`: after applying a skin to a structure, does a `structure skin message` line appear?
+- `ProbeItemEntry` with the item strips on: a skinned item from a transmitter or obelisk shows
+  `InitFromNetInfo ... removed=yes`, and one from the save shows `item loaded from save: ... removed=yes` with
+  `weaponTemplate` back to the plain class. Patrol Thralls should show no `removed=yes`.
 
 ## Tests
 
@@ -195,16 +231,23 @@ no other plugin. The server needs the Visual C++ runtime that AsaApi itself requ
 It needs no game and no Windows:
 
 ```
-cl /std:c++20 /EHsc /I extern\AsaApi\AsaApi\Core\Public /I src tests\logic_tests.cpp && logic_tests.exe configs\config.json --shipped
+cl /std:c++20 /EHsc /I extern\AsaApi\AsaApi\Core\Public /I src tests\logic_tests.cpp
+logic_tests.exe configs\config.json --shipped
+logic_tests.exe configs\config.commented.json --shipped
 ```
 
-## Console viewers (`BlockItemSkinsForConsoles`, `UnequipSkinItemsForConsoles`)
+`--shipped` also checks the shipped defaults: console blocking on, probes, strips and player commands off, no database
+credentials and an empty `TreatAsConsolePlayers`. Point `/I` at your shared AsaApi checkout if you use one.
+
+## Console viewers (`BlockStructureSkinsForConsoles`, `BlockItemSkinsForConsoles`, `UnequipSkinItemsForConsoles`)
 
 Mode for "allow PC players, block consoles": PC players keep every cosmetic; console players get plain items. Nothing is
 removed from the server items, so a console player who moves to PC still has their skins.
 
 | What the console player would get | Route | What the plugin does |
 |---|---|---|
+| Skinned structures in range | `ReplicateActor` | skin class, id and variant blanked for console connections only, restored right after |
+| A skin applied or changed while they are near | `MultiRefreshStructureSkin` / `MultiHandleSkinNetMessage` | the multicast is not sent to console connections |
 | Their own inventory, and the worn gear of characters they see | `ServerRequestItems` | skin class, mod cosmetic id and variant blanked in the copy sent to them; custom data cleared with `FilterItemCustomData` |
 | Outfit skins from the cosmetics tab worn on a character | `ServerRequestItems` (equipped list) | with `UnequipSkinItemsForConsoles`, skin items are left out of the equipped list for that request only |
 | A single item (skin applied, picked up, moved, crafted) | `ClientAddActorItem` | same blanking as above |
@@ -212,8 +255,12 @@ removed from the server items, so a console player who moves to PC still has the
 
 Things to know:
 
-- Verified with PC players handled as consoles (`TreatAsConsolePlayers`): worn outfits, applied skins, mod shirt and mod
-  sword hidden, and the test client started no mod download. Not yet verified with a real console.
+- Structures: verified with real connections. PC and GeForce Now keep skins; Xbox Series X, Series S and PS5 see none,
+  including skins applied while they were in range.
+- Items: verified with PC players handled as consoles (`TreatAsConsolePlayers`): worn outfits, applied skins, mod shirt
+  and mod sword hidden, and the test client started no mod download. Not yet verified with a real console.
+- Hair, eyebrow and facial hair mod cosmetics are not blanked (`ProbePlayers` only counts them).
+- A connection whose platform cannot be read is handled as a console.
 - A console player who applies a skin sees the item plain. That is intended, not a bug.
 - Official skins that swap the weapon class (for example the Cutlass on a sword) stay visible: there is one weapon actor
   for everyone, so its class cannot differ per viewer. These models ship with the game; nothing is downloaded.
@@ -226,21 +273,29 @@ Things to know:
 ## Troubleshooting
 
 - **`CONFIG NOT LOADED` in the log at startup**: `config.json` could not be read (bad JSON or a bad value, the message
-  names it). The plugin then runs on fallback settings: `BlockStructureSkinsForConsoles` and `BlockItemSkinsForConsoles`
-  on, everything else off (strips, player commands, probes, defer), so a typo never lets skins through to consoles. The
+  names it; keys are case-sensitive, so `database` instead of `Database` counts). The plugin then runs on fallback
+  settings: the console blocking switches on, everything else off (strips, player commands, probes, defer), so a typo
+  never lets skins through to consoles. Trailing commas are not allowed in the JSON. The
   error is repeated in the log every minute until `config.json` is fixed and `CosmeticsDisabler.Reload` succeeds. A failed
   Reload on a running server keeps the settings it already had.
 
 - **Log says `Hooks: ... FAILED`:** AsaApi could not resolve that function in its offsets cache (for example after a
   game update). The other hooks still run. Update the cache as usual.
 - **No counters move:** check the plugin log folder for `Hooks: ... ok`, and that the matching `Probe...` switch is `true`.
+- **`refused, EnableStrip is false in config.json`:** `Strip confirm`, `StripTribe confirm` and `Restore` need
+  `EnableStrip: true`; set it, run `CosmeticsDisabler.Reload`, and switch it off again afterwards if you like.
+- **A player still sees skins after `/hideskins`:** they need to relog. With database storage and a map change, one more
+  relog after `DatabaseRefresh_Seconds` may be needed.
+- **`Player preferences database: ... failed`:** check the `Database` block, that the schema exists and the user's
+  rights. Choices already read keep working; the plugin retries on its own.
 
 ## Files
 
-- `src\Main.cpp` - hooks, commands, scan, plugin entry points
-- `src\ProbeLogic.h` - config parsing, counters, formatting (no game types)
-- `configs\` - `config.json`, `config.commented.json`, `PluginInfo.json`
+- `src\Main.cpp` - hooks, commands, scan, player commands, plugin entry points
+- `src\ProbeLogic.h` - config parsing, counters, formatting, preference list, SQL text (no game types)
 - `src\Database.h` - MariaDB Connector/C wrapper and background worker (only used with `PlayerPreferenceStorage: "Database"`)
+- `configs\` - `config.json`, `config.commented.json`, `PluginInfo.json`
 - `tests\logic_tests.cpp` - stand-alone tests
-- `ArkApi/Plugins/CosmeticsDisabler/hidden_skins_players.json` - created at run time by `/hideskins`
+- `ArkApi/Plugins/CosmeticsDisabler/hidden_skins_players.json` - created at run time by `/hideskins` (file storage)
+- `ArkApi/Plugins/CosmeticsDisabler/backups/` - created at run time: `strip-*.jsonl` (structures) and `items-*.jsonl`
 - `vcpkg.json` - `fmt`, `libmariadb` (statically linked; `LICENSE-LGPL-2.1.txt` ships with the plugin)
