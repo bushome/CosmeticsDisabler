@@ -42,7 +42,7 @@ static nlohmann::json Parse(const std::string& text) { return nlohmann::json::pa
 static void TestSettings()
 {
 	const Settings d = ParseSettings(Parse("{}"));
-	CHECK(d.probe_items && d.probe_players && d.probe_structure_messages);
+	CHECK(!d.probe_items && !d.probe_players && !d.probe_structure_messages);   // probes default off
 	CHECK(!d.probe_item_entry && !d.strip_items_on_entry && !d.probe_unlocked_cosmetics);
 	{
 		Settings on;
@@ -95,10 +95,11 @@ static void TestSettings()
 	CHECK(!d.probe_structure_channels);
 	CHECK(ParseSettings(Parse(R"({"ProbeStructureChannels": true})")).probe_structure_channels);
 	CHECK(!d.probe_item_requests);
-	CHECK(!d.block_item_skins_for_consoles);
+	CHECK(d.block_item_skins_for_consoles && d.block_structure_skins_for_consoles);   // console blocking defaults on
 	CHECK(!d.probe_client_rpcs);
-	CHECK(!d.unequip_skin_items_for_consoles);
-	CHECK(ParseSettings(Parse(R"({"UnequipSkinItemsForConsoles": true})")).unequip_skin_items_for_consoles);
+	CHECK(d.unequip_skin_items_for_consoles);
+	CHECK(!ParseSettings(Parse(R"({"UnequipSkinItemsForConsoles": false})")).unequip_skin_items_for_consoles);
+	CHECK(!ParseSettings(Parse(R"({"BlockItemSkinsForConsoles": false})")).block_item_skins_for_consoles);
 	CHECK(d.defer_structure_skins_seconds == 0);
 	CHECK(d.release_structure_skins_per_second == 50);
 	CHECK(ParseSettings(Parse(R"({"ReleaseStructureSkinsPerSecond": 200})")).release_structure_skins_per_second == 200);
@@ -135,9 +136,9 @@ static void TestSettings()
 	CHECK(d.strip_on_map_load_delay_seconds == 120 && d.strip_repeat_minutes == 0);
 	CHECK(d.block_skin_apply_message.empty());
 
-	const Settings s = ParseSettings(Parse(R"({"ProbeItems": false, "SummaryInterval_Seconds": 60, // comment
+	const Settings s = ParseSettings(Parse(R"({"ProbeItems": true, "SummaryInterval_Seconds": 60, // comment
 		"MaxDetailLinesPerSummary": 0, "Unknown": 1})"));
-	CHECK(!s.probe_items && s.probe_players);
+	CHECK(s.probe_items && !s.probe_players);
 	CHECK(s.summary_interval_seconds == 60);
 	CHECK(s.max_detail_lines_per_summary == 0);
 
@@ -441,6 +442,8 @@ static void TestPlayerCommands()
 	CHECK(!IsTreatedAsConsole(s, opted, "bbbb2222"));
 	s.treat_as_console_players.push_back("bbbb2222");
 	CHECK(IsTreatedAsConsole(s, opted, "bbbb2222"));            // the test list still works on its own
+	s.block_item_skins_for_consoles = false;
+	s.block_structure_skins_for_consoles = false;
 	CHECK(!ConsoleBlockingOn(s));
 	s.block_item_skins_for_consoles = true;
 	CHECK(ConsoleBlockingOn(s));
@@ -495,14 +498,30 @@ static void TestPlayerCommands()
 	CHECK(Throws([] { SqlSelectPreferences("t 1"); }));
 }
 
+static void TestFallback()
+{
+	const Settings f = SafeFallbackSettings();
+	CHECK(f.block_structure_skins_for_consoles && f.block_item_skins_for_consoles && f.read_connection_platform);
+	CHECK(!f.enable_strip && !f.strip_on_map_load && !f.strip_items_on_load && !f.strip_items_on_entry);
+	CHECK(!f.enable_player_hide_commands && !f.enable_player_strip && !f.preferences_in_database);
+	CHECK(!f.probe_structure_channels && !f.probe_item_requests && !f.probe_client_rpcs && f.defer_structure_skins_seconds == 0);
+	CHECK(f.unequip_skin_items_for_consoles && f.treat_as_console_players.empty());
+	CHECK(!f.probe_items && !f.probe_players && !f.probe_structure_messages && !f.probe_item_entry && !f.probe_unlocked_cosmetics);
+}
+
 static void CheckShipped(const Settings& s)
 {
 	CHECK(!s.enable_player_hide_commands && !s.enable_player_strip);   // player commands ship switched off
 	CHECK(!s.preferences_in_database && s.db.user.empty() && s.db.password.empty());   // no credentials in the shipped config
 	CHECK(s.player_strip_cooldown_minutes == 30);
-	CHECK(s.probe_items);
-	CHECK(s.probe_players);
-	CHECK(s.probe_structure_messages);
+	CHECK(!s.probe_items);                  // probes ship off
+	CHECK(!s.probe_players);
+	CHECK(!s.probe_structure_messages);
+	CHECK(!s.probe_structure_channels && !s.probe_item_entry && !s.probe_item_requests && !s.probe_client_rpcs);
+	CHECK(s.block_structure_skins_for_consoles);   // console blocking ships on: it is what the plugin is for
+	CHECK(s.block_item_skins_for_consoles);
+	CHECK(s.unequip_skin_items_for_consoles);
+	CHECK(s.treat_as_console_players.empty());
 	CHECK(s.read_connection_platform);
 	CHECK(s.summary_interval_seconds == 30);
 	CHECK(s.max_detail_lines_per_summary == 50);
@@ -513,7 +532,6 @@ static void CheckShipped(const Settings& s)
 	CHECK(s.strip_per_tick == 50);
 	CHECK(!s.filter_items);                 // every new switch ships off
 	CHECK(!s.filter_item_custom_data);
-	CHECK(!s.block_item_skins_for_consoles);
 	CHECK(!s.block_skin_apply);
 	CHECK(!s.strip_on_map_load);
 	CHECK(s.strip_on_map_load_delay_seconds == 120);
@@ -533,6 +551,7 @@ int main(int argc, char** argv)
 	TestPlatform();
 	TestFormatting();
 	TestPlayerCommands();
+	TestFallback();
 
 	if (argc >= 2)
 	{

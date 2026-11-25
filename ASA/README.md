@@ -68,14 +68,15 @@ Things to know:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ProbeItems` | `true` | log item data built for clients |
+| `ProbeItems` | `false` | log item data built for clients |
 | `ProbeItemEntry` | `false` | log skinned items entering an inventory and count which game functions fire (changes nothing) |
 | `ProbeUnlockedCosmetics` | `false` | at login, log the skin items in the player's own inventory with the game's unlocked-cosmetic flag, once per player per session (changes nothing) |
-| `ProbePlayers` | `true` | log characters with hair / eyebrow / facial hair cosmetics |
-| `ProbeStructureMessages` | `true` | log structure skin messages |
+| `ProbePlayers` | `false` | log characters with hair / eyebrow / facial hair cosmetics |
+| `ProbeStructureMessages` | `false` | log structure skin messages |
 | `ProbeStructureChannels` | `false` | count skinned structures replicated to each connection by platform (PC / console / unknown) and the time spent; hooks `UActorChannel::ReplicateActor` (installed when first switched on). Test servers only |
-| `BlockItemSkinsForConsoles` | `false` | blank item skins and mod cosmetic ids in the item data sent to console viewers only: a console player's own items, single items they receive, the gear they see on other characters, and weapons other players hold; PC viewers keep skins; the server item keeps its skin. Hooks `ServerRequestItems`, `ClientAddActorItem` and `ReplicateActor`; needs `ReadConnectionPlatform`. See *Console viewers* below |
-| `UnequipSkinItemsForConsoles` | `false` | skin items worn on a character (outfit pieces from the cosmetics tab, e.g. the Dapper set) are left out of the equipped list while a console viewer's request is built, then put back at once; PC viewers untouched; same `ServerRequestItems` hook; needs `ReadConnectionPlatform` |
+| `BlockItemSkinsForConsoles` | `true` | blank item skins and mod cosmetic ids in the item data sent to console viewers only: a console player's own items, single items they receive, the gear they see on other characters, and weapons other players hold; PC viewers keep skins; the server item keeps its skin. Hooks `ServerRequestItems`, `ClientAddActorItem` and `ReplicateActor`; needs `ReadConnectionPlatform`. See *Console viewers* below |
+| `BlockStructureSkinsForConsoles` | `true` | blank structure skins (official and mod) on console connections only, and withhold skin-change messages from them; PC viewers keep skins and can still apply them. Hooks `ReplicateActor` and the structure skin multicast. See *Console viewers* below |
+| `UnequipSkinItemsForConsoles` | `true` | skin items worn on a character (outfit pieces from the cosmetics tab, e.g. the Dapper set) are left out of the equipped list while a console viewer's request is built, then put back at once; PC viewers untouched; same `ServerRequestItems` hook; needs `ReadConnectionPlatform` |
 | `DeferStructureSkins_Seconds` | `0` | EXPERIMENTAL: PC players get skinned structures plain first; after this delay each player's queue is released `ReleaseStructureSkinsPerSecond` at a time and each structure is sent again with its skin; consoles unaffected; 0 = off |
 | `ReleaseStructureSkinsPerSecond` | `50` | structure skins released per second per PC player (1 - 5000) |
 | `ProbeClientRpcs` | `false` | count item / skin / cosmetic / equipment RPCs sent to console connections, by function and target class; probe only. Test servers only |
@@ -223,6 +224,12 @@ Things to know:
 - Empty `TreatAsConsolePlayers` on live servers; it is for testing only.
 
 ## Troubleshooting
+
+- **`CONFIG NOT LOADED` in the log at startup**: `config.json` could not be read (bad JSON or a bad value, the message
+  names it). The plugin then runs on fallback settings: `BlockStructureSkinsForConsoles` and `BlockItemSkinsForConsoles`
+  on, everything else off (strips, player commands, probes, defer), so a typo never lets skins through to consoles. The
+  error is repeated in the log every minute until `config.json` is fixed and `CosmeticsDisabler.Reload` succeeds. A failed
+  Reload on a running server keeps the settings it already had.
 
 - **Log says `Hooks: ... FAILED`:** AsaApi could not resolve that function in its offsets cache (for example after a
   game update). The other hooks still run. Update the cache as usual.

@@ -1,134 +1,27 @@
 {
-  // Observation (probe) settings. These only read and log; they never change game data.
-
-  // Log what item data is being built for clients: how many items carry a skin / mod cosmetic.
-  "ProbeItems": true,
-
-  // Log skinned items as they enter an inventory (restored from saved data, spawned, moved), with a count of how often
-  // each game function fired. Count and log only: nothing is changed. Used to find out which paths skinned items take.
-  "ProbeItemEntry": false,
-
-  // Log only, off by default. When a player logs in, writes one line per skin item in the player's own inventory
-  // (class, whether the game marks it as an unlocked cosmetic, mod id) so lost unlocked skins can be compared
-  // between logins. Changes nothing.
-  "ProbeUnlockedCosmetics": false,
-
-  // Log characters being replicated with a hair/eyebrow/facial hair mod cosmetic (only positive ids
-  // count; -1 and 0 mean none), with the owner's platform.
-  "ProbePlayers": true,
-
-  // Log structure skin messages (the multicast that pushes a skin change to clients).
-  "ProbeStructureMessages": true,
-
-  // Read UNetConnection::ConnectionPlatform (one byte) for each character's player and log it next to
-  // the crossplay platform. Seen values (test server, real consoles): 1 PC (GeForce Now too), 3 Xbox Series X, 4 Xbox Series S, 5 PS5 slim, 2 / 6 unconfirmed.
-  // Turn off if this ever misbehaves on your build.
-  "ReadConnectionPlatform": true,
-
-  // Count skinned structures as they are replicated to each connection, by the connection's platform (PC, console,
-  // unknown), plus the time the game spends replicating them. Hooks UActorChannel::ReplicateActor, which runs for
-  // every replicated actor on every connection, so leave it off outside tests. Count and log only: nothing is changed.
-  // This is the groundwork for a mode that keeps skins for PC players and hides them from consoles.
-  "ProbeStructureChannels": false,
-
-  // Off by default. Blanks the skin and the mod cosmetic id in the item data sent to CONSOLE viewers only (official and
-  // mod skins alike); PC viewers keep every skin, and the item on the server keeps its skin. Covers a console player's own
-  // inventory, single items they receive (ClientAddActorItem), the gear they see on other characters (ServerRequestItems)
-  // and weapons other players hold (ReplicateActor). Official skins that swap the weapon class (Cutlass) stay visible.
-  // Needs ReadConnectionPlatform; unknown counts as a console. With FilterItemCustomData on, the custom item data of a
-  // blanked item is cleared too.
-  "BlockItemSkinsForConsoles": false,
-
-  // Off by default. Skin items worn on a character (outfit pieces from the cosmetics tab) are left out of the equipped
-  // list while a console viewer's request is built, then put back at once, so the console client does not get them.
-  // Same hook as BlockItemSkinsForConsoles; PC viewers are untouched and the server items stay equipped.
-  // Needs ReadConnectionPlatform.
-  "UnequipSkinItemsForConsoles": false,
-
-  // EXPERIMENTAL, 0 = off. Spreads structure skin loading for PC players: every skinned structure a PC player receives
-  // arrives plain first and is queued for that player. After this many seconds (counted from the first skinned structure
-  // the player sees) the queue is released ReleaseStructureSkinsPerSecond at a time; each released structure is sent again
-  // with its skin. Structures that come into range later are queued and released the same way. Console viewers are not
-  // affected (BlockStructureSkinsForConsoles decides for them). Set the delay a little above your usual login time.
-  "DeferStructureSkins_Seconds": 0,
-
-  // Structure skins released per second per PC player while DeferStructureSkins_Seconds is on (1 - 5000).
-  "ReleaseStructureSkinsPerSecond": 50,
-
-  // Log which player asks for which items (hooks UPrimalInventoryComponent::ServerRequestItems): the viewer's platform,
-  // whether the request is for equipped gear (what other players see on a character), and how many of the items sent
-  // carried a skin. Also counts skinned items built outside any request. Count and log only: nothing is changed.
-  // Groundwork for hiding item skins from console viewers only. Test servers only.
-  "ProbeItemRequests": false,
-
-  // Count remote functions (RPCs) sent to console connections whose name mentions items, skins, cosmetics, equipment
-  // or costumes, by function and target class. Finds which call carries what a console sees. Hooks the per-connection
-  // RPC send (ProcessRemoteFunctionForChannelPrivate). Count only: nothing is changed. Test servers only.
-  "ProbeClientRpcs": false,
-
-  // Blank structure skins (official and mod) on console connections only; PC connections keep them and PC players can
-  // still apply skins. Hooks UActorChannel::ReplicateActor, which runs for every actor on every connection. Off by default.
-  // Also withholds the skin change multicasts (MultiRefreshStructureSkin) from console connections, so a skin changed or
-  // applied while a console player is in range does not reach them. That hook runs for every remote function call.
-  // Works without the probe. Item skins are not covered by this setting.
-  "BlockStructureSkinsForConsoles": false,
-
-  // Testing only: EOS IDs of players whose connection is handled as a console, whatever platform it reports, so
-  // the console path can be tested from a PC. Logged once per connection when it applies. Leave empty on live.
-  "TreatAsConsolePlayers": [],
-
-  // How often the counters are written to the plugin log (5 - 3600).
-  "SummaryInterval_Seconds": 30,
-
-  // Cap on individual "seen one" log lines per summary window (0 - 1000). 0 = counters only.
-  "MaxDetailLinesPerSummary": 50,
-
-  // Actors the Scan / Strip commands look at per second (100 - 1000000). Lower = gentler on the server.
-  "ScanActorsPerTick": 20000,
-
-  // ---- Strip (structures only in this version) ----
-
-  // Master switch. While false, "CosmeticsDisabler.Strip confirm" and "CosmeticsDisabler.Restore" refuse
-  // to change anything. A dry run ("CosmeticsDisabler.Strip") is always allowed and changes nothing.
-  "EnableStrip": false,
-
-  // "All" strips custom cosmetics and official structure skins (tilesets); "CustomOnly" strips only
-  // custom cosmetics (StructureSkinCustomBP).
-  "StripMode": "All",
+  // Where the /hideskins choices are kept.
+  //   "File":     ArkApi/Plugins/CosmeticsDisabler/hidden_skins_players.json, this server only.
+  //   "Database": a MariaDB / MySQL table that every server of the cluster points at, so a choice made on one map
+  //               counts on all of them. The table is created if it does not exist. Each server reads it at startup and
+  //               every DatabaseRefresh_Seconds (5 - 3600); a choice made on another map is picked up by the next read,
+  //               so a player who moves maps within that time may need one more relog. Reads and writes run on a
+  //               background thread; if the database is down the server keeps the last list it read and logs the
+  //               error once. The database user needs CREATE (once), SELECT, INSERT, UPDATE and DELETE on the table.
+  "PlayerPreferenceStorage": "File",
+  "DatabaseRefresh_Seconds": 30,
+  "Database": {
+    "Host": "127.0.0.1",
+    "Port": 3306,
+    "User": "",
+    "Password": "",
+    "Name": "cosmeticsdisabler",          // the database (schema); must already exist
+    "Table": "hidden_skins_players",      // letters, digits and underscores
+    "Ssl": false                          // false = plain connection (local / LAN MariaDB without TLS)
+  },
 
   // Skin class names that are never stripped, e.g. ["Tileset_Frontier_C"]. Names are case-insensitive;
   // use the names the Scan command prints under "official skin classes".
   "AllowSkinClasses": [],
-
-  // Structures changed per second while stripping or restoring (1 - 1000). 50 matches what another
-  // operator ran successfully on a live server.
-  "StripPerTick": 50,
-
-  // ---- Keep skins from reaching clients (these use StripMode and AllowSkinClasses too) ----
-
-  // Blank item skins in the item data sent to clients (armor, weapons, tools). The item on the server keeps
-  // its skin, so turning this off brings the skin straight back. Official skin classes count unless
-  // StripMode is "CustomOnly". Items carrying a mod cosmetic id count as custom.
-  "FilterItems": false,
-
-  // EXPERIMENTAL, off by default. Also clears the custom item data on the client copy of a filtered item.
-  // Mod cosmetic data may travel there, but other mods may keep their own data there too. Test first.
-  "FilterItemCustomData": false,
-
-  // Off by default. Blanks the skin in the item data before the game builds an item from saved or transferred data:
-  // items restored by LogoutVaults, moved between inventories, dropped and picked up. The item is created without the
-  // skin, so a weapon keeps its normal model. Items that are already in the world stay as they are until they are moved.
-  // It follows StripMode and AllowSkinClasses. The server keeps no copy of the removed skin, so test it on a test server.
-  "StripItemsOnEntry": false,
-
-  // Off by default. Removes the skin, with the game's own removal call, from every item as it is rebuilt from the
-  // save when the map loads (a character carrying a skinned weapon or armor across a relog, items in storage). The
-  // item stays and a weapon goes back to its normal model. Only items held by players or tribes (team 50000 and up:
-  // player bodies, tames, storage) are touched; NPC gear (Thralls, pirates, undead, ...) keeps its skins.
-  // Also clears a mod cosmetic id carried on an item with no skin class (mod id and variant set to 0). Follows
-  // StripMode and AllowSkinClasses (a mod cosmetic counts as custom). It changes saved
-  // data once a save is written, so test it on a test server first and keep a backup of the save.
-  "StripSavedItems": false,
 
   // On by default. Before StripItemsOnEntry or StripSavedItems removes an item skin, one line is written to
   // ArkApi/Plugins/CosmeticsDisabler/backups/items-<time>.jsonl: item id, item class, skin class and path, mod id, variant,
@@ -136,23 +29,38 @@
   // re-apply an unlocked skin themselves once BlockSkinApply is off; this file is the record of what was removed.
   "BackupStrippedItems": true,
 
+  // On by default. Blanks the skin and the mod cosmetic id in the item data sent to CONSOLE viewers only (official and
+  // mod skins alike); PC viewers keep every skin, and the item on the server keeps its skin. Covers a console player's own
+  // inventory, single items they receive (ClientAddActorItem), the gear they see on other characters (ServerRequestItems)
+  // and weapons other players hold (ReplicateActor). Official skins that swap the weapon class (Cutlass) stay visible.
+  // Needs ReadConnectionPlatform; unknown counts as a console. With FilterItemCustomData on, the custom item data of a
+  // blanked item is cleared too.
+  "BlockItemSkinsForConsoles": true,
+
   // Refuse new skin applications (a player applying a skin from the cosmetics tab) onto structures and onto
   // items, for skins that StripMode would strip. Removing a skin is always allowed. Does not need EnableStrip
   // because it changes no existing structure or item.
   "BlockSkinApply": false,
-
-  // Run the structure strip automatically once after the map has loaded, and optionally again every
-  // StripRepeat_Minutes (0 = once only). Needs EnableStrip. Writes a backup file whenever it changes
-  // something. StripOnMapLoadDelay_Seconds is how long to wait after startup (10 - 3600).
-  "StripOnMapLoad": false,
-  "StripOnMapLoadDelay_Seconds": 120,
-  "StripRepeat_Minutes": 0,
 
   // Text shown in chat when BlockSkinApply refuses a skin. For an item skin it goes to the player who tried to
   // apply it. For a structure skin it goes to the player standing nearest the structure (within 30 m), at most
   // once every 5 seconds per player, because the server cannot tell who clicked. Empty = no message. Up to 300
   // characters.
   "BlockSkinApplyMessage": "",
+
+  // Blank structure skins (official and mod) on console connections only; PC connections keep them and PC players can
+  // still apply skins. Hooks UActorChannel::ReplicateActor, which runs for every actor on every connection. On by default.
+  // Also withholds the skin change multicasts (MultiRefreshStructureSkin) from console connections, so a skin changed or
+  // applied while a console player is in range does not reach them. That hook runs for every remote function call.
+  // Works without the probe. Item skins are not covered by this setting.
+  "BlockStructureSkinsForConsoles": true,
+
+  // EXPERIMENTAL, 0 = off. Spreads structure skin loading for PC players: every skinned structure a PC player receives
+  // arrives plain first and is queued for that player. After this many seconds (counted from the first skinned structure
+  // the player sees) the queue is released ReleaseStructureSkinsPerSecond at a time; each released structure is sent again
+  // with its skin. Structures that come into range later are queued and released the same way. Console viewers are not
+  // affected (BlockStructureSkinsForConsoles decides for them). Set the delay a little above your usual login time.
+  "DeferStructureSkins_Seconds": 0,
 
   // Player chat commands. Command names start with a slash and are registered when the server starts (changing
   // them or switching a feature on needs a restart, not just a reload).
@@ -177,23 +85,109 @@
   "StripSkinsCommand": "/stripskins",
   "PlayerStripCooldown_Minutes": 30,
 
-  // Where the /hideskins choices are kept.
-  //   "File":     ArkApi/Plugins/CosmeticsDisabler/hidden_skins_players.json, this server only.
-  //   "Database": a MariaDB / MySQL table that every server of the cluster points at, so a choice made on one map
-  //               counts on all of them. The table is created if it does not exist. Each server reads it at startup and
-  //               every DatabaseRefresh_Seconds (5 - 3600); a choice made on another map is picked up by the next read,
-  //               so a player who moves maps within that time may need one more relog. Reads and writes run on a
-  //               background thread; if the database is down the server keeps the last list it read and logs the
-  //               error once. The database user needs CREATE (once), SELECT, INSERT, UPDATE and DELETE on the table.
-  "PlayerPreferenceStorage": "File",
-  "DatabaseRefresh_Seconds": 30,
-  "Database": {
-    "Host": "127.0.0.1",
-    "Port": 3306,
-    "User": "",
-    "Password": "",
-    "Name": "cosmeticsdisabler",          // the database (schema); must already exist
-    "Table": "hidden_skins_players",      // letters, digits and underscores
-    "Ssl": false                          // false = plain connection (local / LAN MariaDB without TLS)
-  }
+  // Master switch. While false, "CosmeticsDisabler.Strip confirm" and "CosmeticsDisabler.Restore" refuse
+  // to change anything. A dry run ("CosmeticsDisabler.Strip") is always allowed and changes nothing.
+  "EnableStrip": false,
+
+  // EXPERIMENTAL, off by default. Also clears the custom item data on the client copy of a filtered item.
+  // Mod cosmetic data may travel there, but other mods may keep their own data there too. Test first.
+  "FilterItemCustomData": false,
+
+  // Blank item skins in the item data sent to clients (armor, weapons, tools). The item on the server keeps
+  // its skin, so turning this off brings the skin straight back. Official skin classes count unless
+  // StripMode is "CustomOnly". Items carrying a mod cosmetic id count as custom.
+  "FilterItems": false,
+
+  // Cap on individual "seen one" log lines per summary window (0 - 1000). 0 = counters only.
+  "MaxDetailLinesPerSummary": 50,
+
+  // Count remote functions (RPCs) sent to console connections whose name mentions items, skins, cosmetics, equipment
+  // or costumes, by function and target class. Finds which call carries what a console sees. Hooks the per-connection
+  // RPC send (ProcessRemoteFunctionForChannelPrivate). Count only: nothing is changed. Test servers only.
+  "ProbeClientRpcs": false,
+
+  // Log skinned items as they enter an inventory (restored from saved data, spawned, moved), with a count of how often
+  // each game function fired. Count and log only: nothing is changed. Used to find out which paths skinned items take.
+  "ProbeItemEntry": false,
+
+  // Log which player asks for which items (hooks UPrimalInventoryComponent::ServerRequestItems): the viewer's platform,
+  // whether the request is for equipped gear (what other players see on a character), and how many of the items sent
+  // carried a skin. Also counts skinned items built outside any request. Count and log only: nothing is changed.
+  // Groundwork for hiding item skins from console viewers only. Test servers only.
+  "ProbeItemRequests": false,
+
+  // Log what item data is being built for clients: how many items carry a skin / mod cosmetic.
+  "ProbeItems": false,
+
+  // Log characters being replicated with a hair/eyebrow/facial hair mod cosmetic (only positive ids
+  // count; -1 and 0 mean none), with the owner's platform.
+  "ProbePlayers": false,
+
+  // Count skinned structures as they are replicated to each connection, by the connection's platform (PC, console,
+  // unknown), plus the time the game spends replicating them. Hooks UActorChannel::ReplicateActor, which runs for
+  // every replicated actor on every connection, so leave it off outside tests. Count and log only: nothing is changed.
+  // This is the groundwork for a mode that keeps skins for PC players and hides them from consoles.
+  "ProbeStructureChannels": false,
+
+  // Log structure skin messages (the multicast that pushes a skin change to clients).
+  "ProbeStructureMessages": false,
+
+  // Log only, off by default. When a player logs in, writes one line per skin item in the player's own inventory
+  // (class, whether the game marks it as an unlocked cosmetic, mod id) so lost unlocked skins can be compared
+  // between logins. Changes nothing.
+  "ProbeUnlockedCosmetics": false,
+
+  // Read UNetConnection::ConnectionPlatform (one byte) for each character's player and log it next to
+  // the crossplay platform. Seen values (test server, real consoles): 1 PC (GeForce Now too), 3 Xbox Series X, 4 Xbox Series S, 5 PS5 slim, 2 / 6 unconfirmed.
+  // Turn off if this ever misbehaves on your build.
+  "ReadConnectionPlatform": true,
+
+  // Structure skins released per second per PC player while DeferStructureSkins_Seconds is on (1 - 5000).
+  "ReleaseStructureSkinsPerSecond": 50,
+
+  // Actors the Scan / Strip commands look at per second (100 - 1000000). Lower = gentler on the server.
+  "ScanActorsPerTick": 20000,
+
+  // Off by default. Blanks the skin in the item data before the game builds an item from saved or transferred data:
+  // items restored by LogoutVaults, moved between inventories, dropped and picked up. The item is created without the
+  // skin, so a weapon keeps its normal model. Items that are already in the world stay as they are until they are moved.
+  // It follows StripMode and AllowSkinClasses. The server keeps no copy of the removed skin, so test it on a test server.
+  "StripItemsOnEntry": false,
+
+  // "All" strips custom cosmetics and official structure skins (tilesets); "CustomOnly" strips only
+  // custom cosmetics (StructureSkinCustomBP).
+  "StripMode": "All",
+
+  // Run the structure strip automatically once after the map has loaded, and optionally again every
+  // StripRepeat_Minutes (0 = once only). Needs EnableStrip. Writes a backup file whenever it changes
+  // something. StripOnMapLoadDelay_Seconds is how long to wait after startup (10 - 3600).
+  "StripOnMapLoad": false,
+  "StripOnMapLoadDelay_Seconds": 120,
+  "StripRepeat_Minutes": 0,
+
+  // Structures changed per second while stripping or restoring (1 - 1000). 50 matches what another
+  // operator ran successfully on a live server.
+  "StripPerTick": 50,
+
+  // Off by default. Removes the skin, with the game's own removal call, from every item as it is rebuilt from the
+  // save when the map loads (a character carrying a skinned weapon or armor across a relog, items in storage). The
+  // item stays and a weapon goes back to its normal model. Only items held by players or tribes (team 50000 and up:
+  // player bodies, tames, storage) are touched; NPC gear (Thralls, pirates, undead, ...) keeps its skins.
+  // Also clears a mod cosmetic id carried on an item with no skin class (mod id and variant set to 0). Follows
+  // StripMode and AllowSkinClasses (a mod cosmetic counts as custom). It changes saved
+  // data once a save is written, so test it on a test server first and keep a backup of the save.
+  "StripSavedItems": false,
+
+  // How often the counters are written to the plugin log (5 - 3600).
+  "SummaryInterval_Seconds": 30,
+
+  // Testing only: EOS IDs of players whose connection is handled as a console, whatever platform it reports, so
+  // the console path can be tested from a PC. Logged once per connection when it applies. Leave empty on live.
+  "TreatAsConsolePlayers": [],
+
+  // On by default. Skin items worn on a character (outfit pieces from the cosmetics tab) are left out of the equipped
+  // list while a console viewer's request is built, then put back at once, so the console client does not get them.
+  // Same hook as BlockItemSkinsForConsoles; PC viewers are untouched and the server items stay equipped.
+  // Needs ReadConnectionPlatform.
+  "UnequipSkinItemsForConsoles": true
 }

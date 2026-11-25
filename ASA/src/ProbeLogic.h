@@ -50,19 +50,19 @@ namespace CosmeticsProbe
 
 	struct Settings
 	{
-		bool probe_items = true;                 // hook the item -> client net info builder
+		bool probe_items = false;                // hook the item -> client net info builder
 		bool probe_item_entry = false;           // log skinned items entering an inventory (count only, changes nothing)
 		bool probe_unlocked_cosmetics = false;   // log, once per login, the skin items in the player's own inventory (changes nothing)
 		bool backup_stripped_items = true;       // write a line per item skin removed (items-<time>.jsonl) before removing it
 		bool strip_items_on_load = false;        // remove the skin (game removal call) from items as they are rebuilt from the save
 		bool strip_items_on_entry = false;       // blank the skin in item data before an item is built (restores, transfers, drops)
-		bool probe_players = true;               // hook character pre-replication (hair/eyebrow/facial hair ids)
-		bool probe_structure_messages = true;    // hook the structure skin multicast
+		bool probe_players = false;              // hook character pre-replication (hair/eyebrow/facial hair ids)
+		bool probe_structure_messages = false;   // hook the structure skin multicast
 		bool read_connection_platform = true;    // read UNetConnection::ConnectionPlatform (a byte) for each character's player
-		bool block_structure_skins_for_consoles = false; // blank structure skins on console connections only (ReplicateActor)
+		bool block_structure_skins_for_consoles = true;  // blank structure skins on console connections only (ReplicateActor)
 		bool probe_structure_channels = false;   // count skinned structures replicated per connection platform (ReplicateActor)
-		bool block_item_skins_for_consoles = false; // blank item skins in the item data sent to console viewers only (ServerRequestItems)
-		bool unequip_skin_items_for_consoles = false; // EXPERIMENTAL: equipped skin items (bIsItemSkin) are sent to console viewers as not equipped
+		bool block_item_skins_for_consoles = true;  // blank item skins in the item data sent to console viewers only (ServerRequestItems)
+		bool unequip_skin_items_for_consoles = true;  // EXPERIMENTAL: equipped skin items (bIsItemSkin) are sent to console viewers as not equipped
 		bool probe_client_rpcs = false;          // count remote functions sent to console connections whose name mentions items/skins/cosmetics/equipment (probe)
 		bool probe_item_requests = false;        // hook UPrimalInventoryComponent::ServerRequestItems: who asks for items, equipped gear or not (probe only)
 		std::vector<std::string> treat_as_console_players; // testing: EOS IDs whose connection counts as a console
@@ -106,6 +106,20 @@ namespace CosmeticsProbe
 			if (!std::isalnum(c) && c != '_')
 				return false;
 		return true;
+	}
+
+	// Used when config.json cannot be read at load: the defaults, but with the console blocking ON, so a typo in the
+	// config never quietly sends skins to consoles. Everything else (strips, player commands, probes) stays off.
+	inline Settings SafeFallbackSettings()
+	{
+		Settings s;
+		s.read_connection_platform = true;
+		s.block_structure_skins_for_consoles = true;
+		s.block_item_skins_for_consoles = true;
+		s.probe_items = false;
+		s.probe_players = false;
+		s.probe_structure_messages = false;
+		return s;
 	}
 
 	namespace detail

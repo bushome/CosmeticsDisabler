@@ -504,11 +504,16 @@ namespace
 		return ParseSettings(root);
 	}
 
+	std::string g_config_error;   // set while running on SafeFallbackSettings (config.json could not be read at load)
+
 	bool ReloadSettings(std::string& error)
 	{
 		try
 		{
 			g_settings = LoadSettings();
+			if (!g_config_error.empty())
+				Log::GetLog()->info("config.json loaded again; the fallback settings are no longer used");
+			g_config_error.clear();
 			g_budget.Reset(g_settings.max_detail_lines_per_summary);
 			g_item_backup_failed = false;   // a reload tries the item backup file again
 			g_connection_info.clear();      // TreatAsConsolePlayers may have changed
@@ -726,7 +731,7 @@ namespace
 			g_player_report_time.erase(team);
 			message = "Skins removed from " + std::to_string(g_scan_result.stripped) + " structures"
 				+ (g_scan_result.strip_failed > 0 ? " (" + std::to_string(g_scan_result.strip_failed) + " could not be changed)" : "")
-				+ ". Relog to see the change.";
+				+ ".";
 		}
 		Log::GetLog()->info("Player strip (team {}, {}): {}{}", team, apply ? "confirmed" : "report", message,
 			backup_used ? " backup " + backup_name : "");
@@ -1017,6 +1022,9 @@ namespace
 		g_game_thread = std::this_thread::get_id();
 		DeferTick();
 		DbTick();
+		if (!g_config_error.empty() && g_clock % 60 == 0)
+			Log::GetLog()->error("CONFIG NOT LOADED ({}); still on fallback settings (console blocking on). Fix config.json and run {}",
+				g_config_error, kReloadCommand);
 		if (g_clock - g_prune_clock >= 5)
 		{
 			g_prune_clock = g_clock;
@@ -1110,7 +1118,11 @@ namespace
 		if (word != "confirm")
 			return std::string("CosmeticsDisabler: unknown argument. Use ") + kStripCommand + " for a dry run or " + kStripCommand + " confirm";
 		if (!g_settings.enable_strip)
-			return "CosmeticsDisabler: strip refused, EnableStrip is false in config.json";
+		{
+			const std::string refusal = "CosmeticsDisabler: strip refused, EnableStrip is false in config.json";
+			Log::GetLog()->warn("{}", refusal);   // the reply only reaches the admin's chat; keep it in the log too
+			return refusal;
+		}
 		if (!g_dry_run_done)
 			return std::string("CosmeticsDisabler: strip refused, run a dry run first (") + kStripCommand + ") and check the log";
 
@@ -1137,7 +1149,11 @@ namespace
 			return list.empty() ? "CosmeticsDisabler: no backup files found" : "CosmeticsDisabler: backups: " + list + " (use " + kRestoreCommand + " <file>)";
 		}
 		if (!g_settings.enable_strip)
-			return "CosmeticsDisabler: restore refused, EnableStrip is false in config.json";
+		{
+			const std::string refusal = "CosmeticsDisabler: restore refused, EnableStrip is false in config.json";
+			Log::GetLog()->warn("{}", refusal);   // the reply only reaches the admin's chat; keep it in the log too
+			return refusal;
+		}
 		if (!IsSafeBackupName(name))
 			return "CosmeticsDisabler: restore refused, give just the backup file name";
 
@@ -1191,7 +1207,11 @@ namespace
 		if (word != "confirm")
 			return usage;
 		if (!g_settings.enable_strip)
-			return "CosmeticsDisabler: strip refused, EnableStrip is false in config.json";
+		{
+			const std::string refusal = "CosmeticsDisabler: strip refused, EnableStrip is false in config.json";
+			Log::GetLog()->warn("{}", refusal);   // the reply only reaches the admin's chat; keep it in the log too
+			return refusal;
+		}
 		const auto report = g_admin_report_time.find(team);
 		if (report == g_admin_report_time.end() || !PlayerReportStillValid(NowSeconds(), report->second))
 			return std::string("CosmeticsDisabler: run ") + kStripTribeCommand + " " + std::to_string(team)
@@ -2558,7 +2578,13 @@ extern "C" __declspec(dllexport) void Plugin_Init()
 	std::string error;
 	if (!ReloadSettings(error))
 	{
-		Log::GetLog()->error("Config not loaded ({}); using defaults. Fix config.json and run {}", error, kReloadCommand);
+		g_settings = SafeFallbackSettings();
+		g_config_error = error;
+		Log::GetLog()->error("************************************************************************");
+		Log::GetLog()->error("CONFIG NOT LOADED: {}", error);
+		Log::GetLog()->error("Running on FALLBACK settings: console skin blocking ON (structures and items), everything else OFF");
+		Log::GetLog()->error("(strips, player commands, probes, defer). Fix config.json and run {}", kReloadCommand);
+		Log::GetLog()->error("************************************************************************");
 		g_budget.Reset(g_settings.max_detail_lines_per_summary);
 	}
 
