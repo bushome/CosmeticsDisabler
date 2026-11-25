@@ -551,6 +551,13 @@ namespace
 			g_channel_pairs.clear();
 			g_connection_info.clear();
 		}
+		else
+		{
+			// Probe off: nothing is reported, but keep the window counters from piling up.
+			g_channels = ChannelCounters{};
+			g_channel_pairs.clear();
+			g_channels_off_thread = 0;
+		}
 		g_counters.Clear();
 		g_seen_characters.clear();
 		g_last_apply_notice.clear();
@@ -2196,6 +2203,9 @@ __int64 Hook_UActorChannel_ReplicateActor(UActorChannel* channel)
 		return UActorChannel_ReplicateActor_original(channel);
 	}
 
+	// Counting, timing and the pair set are probe work only: with blocking on and the probe off they ran on every send
+	// and the pair set was never emptied (it grew for the whole uptime, and each rehash of it was a hitch).
+	const bool probe = g_settings.probe_structure_channels;
 	++g_channels.calls;
 	bool skinned = false;
 	ConnectionInfo info;
@@ -2341,7 +2351,7 @@ __int64 Hook_UActorChannel_ReplicateActor(UActorChannel* channel)
 		skinned = false;
 	}
 
-	const auto start = std::chrono::steady_clock::now();
+	const auto start = probe ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 	const __int64 result = UActorChannel_ReplicateActor_original(channel);
 	if (weapon_info != nullptr)
 	{
@@ -2356,6 +2366,8 @@ __int64 Hook_UActorChannel_ReplicateActor(UActorChannel* channel)
 		WriteAt<int>(blank_actor, g_off_skin_variant, saved_variant);
 		++g_channels.blanked;
 	}
+	if (!probe)
+		return result;
 	const long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
 	g_channels.ns_all += ns;
 	if (skinned)
