@@ -80,14 +80,10 @@ namespace
 	const char* const kHookCharacterPreRep = "AShooterCharacter.PreReplication(IRepChangedPropertyTracker&)";
 	const char* const kHookSkinMessage = "APrimalStructure.MultiHandleSkinNetMessage(FName,FSkinNetMessageParams&)";
 	// Verified in the offsets cache (AsaApiCache98.9). Not declared in the API headers, so hooked by hand.
-	const char* const kHookSkinRefresh = "APrimalStructure.MultiRefreshStructureSkin(TSubclassOf<APrimalStructure>,__int64,int,bool,bool)";
 	// Item entry probe. Strings copied from the offsets cache (checked on the test server, 2026-11-23).
-	const char* const kHookAddItem = "UPrimalInventoryComponent.AddItem(FItemNetInfo&,bool,bool,bool,FItemNetID*,bool,bool,bool,AShooterCharacter*,bool,bool,bool,bool,bool,bool)";
-	const char* const kHookNotifyItemAdded = "UPrimalInventoryComponent.NotifyItemAdded(UPrimalItem*,bool,bool)";
 	const char* const kHookInitFromNetInfo = "UPrimalItem.InitFromNetInfo(FItemNetInfo&,UWorld*)";
 	const char* const kHookUseItemOntoItem = "UPrimalItem.UseItemOntoItem(UPrimalItem*,int,AShooterPlayerController*)";
 	const char* const kHookLoadedFromSave = "UPrimalItem.InventoryLoadedFromSaveGame()";
-	const char* const kHookAddNewItem = "UPrimalItem.AddNewItem(TSubclassOf<UPrimalItem>,UPrimalInventoryComponent*,bool,bool,float,bool,int,bool,float,bool,TSubclassOf<UPrimalItem>,float,bool,bool,bool,bool,bool,bool,UWorld*)";
 	const char* const kLevelActorsField = "ULevel.Actors2";
 	constexpr const char* kPluginVersion = "0.6.0";
 	const char* const kReplicatedSkinClassField = "APrimalStructure.ReplicatedStructureMySkinClass";
@@ -118,10 +114,7 @@ namespace
 	// Item entry probe counters: how often each function ran, and how often the item carried a skin.
 	struct EntryCounters
 	{
-		long long add_item = 0, add_item_skin = 0;
-		long long notify = 0, notify_skin = 0;
 		long long init = 0, init_skin = 0, init_stripped = 0;
-		long long add_new = 0, add_new_skin = 0;
 		long long loaded_skin = 0, loaded_stripped = 0, loaded_mod = 0, loaded_mod_stripped = 0;
 	};
 	EntryCounters g_entry;
@@ -526,7 +519,7 @@ namespace
 		}
 	}
 
-	void WriteSummary()
+	void WriteSummary(long long off_thread)
 	{
 		const int window = static_cast<int>(g_clock - g_window_start);
 		Log::GetLog()->info("{}", FormatSummary(g_counters, window));
@@ -535,10 +528,8 @@ namespace
 			Log::GetLog()->info("  items loaded from save with a skin: {} (skin removed {}), with a mod cosmetic id: {} (cleared {})", g_entry.loaded_skin,
 				g_entry.loaded_stripped, g_entry.loaded_mod, g_entry.loaded_mod_stripped);
 			Log::GetLog()->info(
-				"  item entry (skinned/total): AddItem {}/{}, NotifyItemAdded {}/{}, InitFromNetInfo {}/{} (skin removed {}), AddNewItem {}/{}",
-				g_entry.add_item_skin, g_entry.add_item, g_entry.notify_skin, g_entry.notify, g_entry.init_skin, g_entry.init,
-				g_entry.init_stripped, g_entry.add_new_skin, g_entry.add_new);
-			g_entry = EntryCounters{};
+				"  item entry (skinned/total): InitFromNetInfo {}/{} (skin removed {})",
+				g_entry.init_skin, g_entry.init, g_entry.init_stripped);
 		}
 		if (g_settings.probe_structure_channels)
 		{
@@ -548,21 +539,25 @@ namespace
 			Log::GetLog()->info(
 				"  structure channels: ReplicateActor calls {} ({} off the game thread), structures {}, skinned {} (PC {}, console {}, unknown {}), "
 				"skinned connection/structure pairs {}, blanked for console {}, time in ReplicateActor: all {} us, skinned {} us",
-				g_channels.calls, g_channels_off_thread.exchange(0), g_channels.structures, g_channels.skinned, g_channels.skinned_pc,
+				g_channels.calls, off_thread, g_channels.structures, g_channels.skinned, g_channels.skinned_pc,
 				g_channels.skinned_console, g_channels.skinned_unknown, g_channel_pairs.size(), g_channels.blanked, g_channels.ns_all / 1000, g_channels.ns_skinned / 1000);
 			if (!by_platform.empty())
 				Log::GetLog()->info("  skinned structure channels by connection platform: {}", by_platform);
-			g_channels = ChannelCounters{};
-			g_channel_pairs.clear();
+		}
+	}
+
+	void FinishSummaryWindow()
+	{
+		const auto off_thread = g_channels_off_thread.exchange(0);
+		if (g_settings.log_probe_summary)
+			WriteSummary(off_thread);
+
+		// Keep Status current and renew the detail budget even when scheduled logging is off.
+		g_entry = EntryCounters{};
+		g_channels = ChannelCounters{};
+		g_channel_pairs.clear();
+		if (g_settings.probe_structure_channels)
 			g_connection_info.clear();
-		}
-		else
-		{
-			// Probe off: nothing is reported, but keep the window counters from piling up.
-			g_channels = ChannelCounters{};
-			g_channel_pairs.clear();
-			g_channels_off_thread = 0;
-		}
 		g_counters.Clear();
 		g_seen_characters.clear();
 		g_last_apply_notice.clear();
@@ -1044,7 +1039,7 @@ namespace
 			AbortRun(e.what());
 		}
 		if (g_alive && g_clock - g_window_start >= g_settings.summary_interval_seconds)
-			WriteSummary();
+			FinishSummaryWindow();
 	}
 
 	// ------------------------------------------------------------------------------------------
@@ -1443,16 +1438,10 @@ DECLARE_HOOK(AShooterPlayerController_ClientAddActorItem, void, AShooterPlayerCo
 DECLARE_HOOK(AShooterCharacter_PreReplication, void, AShooterCharacter*, IRepChangedPropertyTracker&);
 DECLARE_HOOK(APrimalStructure_MultiHandleSkinNetMessage, void, APrimalStructure*, FName, const FSkinNetMessageParams&);
 DECLARE_HOOK(APrimalStructure_SetStructureSkin, bool, APrimalStructure*, TSubclassOf<APrimalStructure>&, __int64, int);
-DECLARE_HOOK(APrimalStructure_MultiRefreshStructureSkin, void, APrimalStructure*, TSubclassOf<APrimalStructure>&, __int64, int, bool, bool);
-// Item entry probe (count and log only). Signatures follow the game's functions: references are pointers.
-DECLARE_HOOK(UPrimalInventoryComponent_AddItem, UPrimalItem*, UPrimalInventoryComponent*, FItemNetInfo*, bool, bool, bool, FItemNetID*, bool, bool, bool,
-	AShooterCharacter*, bool, bool, bool, bool, bool, bool);
-DECLARE_HOOK(UPrimalInventoryComponent_NotifyItemAdded, void, UPrimalInventoryComponent*, UPrimalItem*, bool, bool);
+// Item entry, saved-item strip and application guard hooks.
 DECLARE_HOOK(UPrimalItem_InitFromNetInfo, void, UPrimalItem*, FItemNetInfo*, UWorld*);
 DECLARE_HOOK(UPrimalItem_UseItemOntoItem, bool, UPrimalItem*, UPrimalItem*, int, AShooterPlayerController*);
 DECLARE_HOOK(UPrimalItem_InventoryLoadedFromSaveGame, void, UPrimalItem*);
-DECLARE_HOOK(UPrimalItem_AddNewItem, UPrimalItem*, TSubclassOf<UPrimalItem>*, UPrimalInventoryComponent*, bool, bool, float, bool, int, bool, float, bool,
-	TSubclassOf<UPrimalItem>*, float, bool, bool, bool, bool, bool, bool, UWorld*);
 
 FItemNetInfo* Hook_UPrimalItem_GetItemNetInfo(UPrimalItem* item, FItemNetInfo* result, bool for_client)
 {
@@ -1584,40 +1573,6 @@ FItemNetInfo* Hook_UPrimalItem_GetItemNetInfo(UPrimalItem* item, FItemNetInfo* r
 	return info;
 }
 
-UPrimalItem* Hook_UPrimalInventoryComponent_AddItem(UPrimalInventoryComponent* inv, FItemNetInfo* info, bool equip, bool slot, bool no_stack,
-	FItemNetID* insert_after, bool hud, bool no_spoil, bool force_incomplete, AShooterCharacter* owner, bool ignore_max, bool insert_at, bool version_check,
-	bool no_refresh, bool no_milestones, bool no_broadcast)
-{
-	const bool probe = g_alive && g_settings.probe_item_entry && info != nullptr;
-	UClass* skin = nullptr;
-	if (probe)
-	{
-		skin = info->ItemSkinTemplateField().uClass;
-		++g_entry.add_item;
-		if (skin != nullptr)
-			++g_entry.add_item_skin;
-	}
-	UPrimalItem* result = UPrimalInventoryComponent_AddItem_original(inv, info, equip, slot, no_stack, insert_after, hud, no_spoil, force_incomplete, owner,
-		ignore_max, insert_at, version_check, no_refresh, no_milestones, no_broadcast);
-	if (probe && skin != nullptr && g_budget.Take())
-		Log::GetLog()->info("item entry: AddItem archetype={} skin={} equip={}", ClassName(info->ItemArchetypeField().uClass), ClassName(skin), equip ? "yes" : "no");
-	return result;
-}
-
-void Hook_UPrimalInventoryComponent_NotifyItemAdded(UPrimalInventoryComponent* inv, UPrimalItem* item, bool equipped, bool no_broadcast)
-{
-	UPrimalInventoryComponent_NotifyItemAdded_original(inv, item, equipped, no_broadcast);
-	if (!g_alive || !g_settings.probe_item_entry || item == nullptr)
-		return;
-	++g_entry.notify;
-	UClass* skin = item->ItemSkinTemplateField().uClass;
-	if (skin == nullptr)
-		return;
-	++g_entry.notify_skin;
-	if (g_budget.Take())
-		Log::GetLog()->info("item entry: NotifyItemAdded item={} skin={} weaponTemplate={}", ClassNameOfObject(item), ClassName(skin), WeaponTemplateName(item));
-}
-
 void Hook_UPrimalItem_InitFromNetInfo(UPrimalItem* item, FItemNetInfo* info, UWorld* world)
 {
 	const bool active = g_alive && info != nullptr && (g_settings.probe_item_entry || g_settings.strip_items_on_entry);
@@ -1654,25 +1609,6 @@ void Hook_UPrimalItem_InitFromNetInfo(UPrimalItem* item, FItemNetInfo* info, UWo
 	if (active && skin != nullptr && g_budget.Take())
 		Log::GetLog()->info("item entry: InitFromNetInfo archetype={} skin={} removed={}", ClassName(info->ItemArchetypeField().uClass), ClassName(skin),
 			stripped ? "yes" : "no");
-}
-
-UPrimalItem* Hook_UPrimalItem_AddNewItem(TSubclassOf<UPrimalItem>* archetype, UPrimalInventoryComponent* inv, bool equip, bool no_stack, float quality,
-	bool no_bp, int quantity, bool force_bp, float max_difficulty, bool create_on_client, TSubclassOf<UPrimalItem>* apply_skin, float min_random_quality,
-	bool clamp, bool ignore_max, bool skip_deny, bool hud, bool no_milestones, bool no_broadcast, UWorld* world)
-{
-	const bool probe = g_alive && g_settings.probe_item_entry;
-	UClass* skin = (probe && apply_skin != nullptr) ? apply_skin->uClass : nullptr;
-	if (probe)
-	{
-		++g_entry.add_new;
-		if (skin != nullptr)
-			++g_entry.add_new_skin;
-	}
-	UPrimalItem* result = UPrimalItem_AddNewItem_original(archetype, inv, equip, no_stack, quality, no_bp, quantity, force_bp, max_difficulty, create_on_client,
-		apply_skin, min_random_quality, clamp, ignore_max, skip_deny, hud, no_milestones, no_broadcast, world);
-	if (probe && skin != nullptr && g_budget.Take())
-		Log::GetLog()->info("item entry: AddNewItem archetype={} skin={}", archetype != nullptr ? ClassName(archetype->uClass) : "(null)", ClassName(skin));
-	return result;
 }
 
 void Hook_AShooterCharacter_PreReplication(AShooterCharacter* character, IRepChangedPropertyTracker& tracker)
@@ -1731,28 +1667,6 @@ void Hook_APrimalStructure_MultiHandleSkinNetMessage(APrimalStructure* structure
 		g_counters.message_structures.Add(ClassNameOfObject(structure));
 		if (g_budget.Take())
 			Log::GetLog()->info("structure skin message: {} on {}", name, ClassNameOfObject(structure));
-	}
-	catch (...)
-	{
-	}
-}
-
-// Probe: the skin change multicast that carries the class, id and variant as arguments (not as properties),
-// so the ReplicateActor blanking does not touch it. Counts and logs only.
-void Hook_APrimalStructure_MultiRefreshStructureSkin(APrimalStructure* structure, TSubclassOf<APrimalStructure>& skin_class, __int64 skin_id, int variant, bool a, bool b)
-{
-	APrimalStructure_MultiRefreshStructureSkin_original(structure, skin_class, skin_id, variant, a, b);
-	if (!g_alive || !g_settings.probe_structure_messages)
-		return;
-
-	try
-	{
-		++g_counters.skin_refreshes;
-		const std::string cls = skin_class.uClass != nullptr ? ClassName(skin_class.uClass) : "id " + std::to_string(skin_id);
-		g_counters.refresh_skin_classes.Add(cls);
-		if (g_budget.Take())
-			Log::GetLog()->info("structure skin refresh multicast: {} (id {}, variant {}, flags {} {}) on {}", cls, skin_id, variant, a, b,
-				ClassNameOfObject(structure));
 	}
 	catch (...)
 	{
@@ -2594,20 +2508,14 @@ extern "C" __declspec(dllexport) void Plugin_Init()
 	const bool ok_skin = hooks.SetHook(kHookSkinMessage, &Hook_APrimalStructure_MultiHandleSkinNetMessage,
 		&APrimalStructure_MultiHandleSkinNetMessage_original);
 	const bool ok_apply = hooks.SetHook(kSetSkinSymbol, &Hook_APrimalStructure_SetStructureSkin, &APrimalStructure_SetStructureSkin_original);
-	const bool ok_refresh = hooks.SetHook(kHookSkinRefresh, &Hook_APrimalStructure_MultiRefreshStructureSkin, &APrimalStructure_MultiRefreshStructureSkin_original);
-	Log::GetLog()->info("Hook (skin refresh multicast probe): {}", ok_refresh ? "ok" : "FAILED");
 	Log::GetLog()->info("Hooks: item net info {}, character pre-replication {}, structure skin message {}, skin apply guard {}",
 		ok_item ? "ok" : "FAILED", ok_char ? "ok" : "FAILED", ok_skin ? "ok" : "FAILED", ok_apply ? "ok" : "FAILED");
-	const bool ok_add = hooks.SetHook(kHookAddItem, &Hook_UPrimalInventoryComponent_AddItem, &UPrimalInventoryComponent_AddItem_original);
-	const bool ok_notify = hooks.SetHook(kHookNotifyItemAdded, &Hook_UPrimalInventoryComponent_NotifyItemAdded, &UPrimalInventoryComponent_NotifyItemAdded_original);
 	const bool ok_init = hooks.SetHook(kHookInitFromNetInfo, &Hook_UPrimalItem_InitFromNetInfo, &UPrimalItem_InitFromNetInfo_original);
-	const bool ok_new = hooks.SetHook(kHookAddNewItem, &Hook_UPrimalItem_AddNewItem, &UPrimalItem_AddNewItem_original);
 	const bool ok_load = hooks.SetHook(kHookLoadedFromSave, &Hook_UPrimalItem_InventoryLoadedFromSaveGame, &UPrimalItem_InventoryLoadedFromSaveGame_original);
 	Log::GetLog()->info("Hook (item load probe): InventoryLoadedFromSaveGame {}", ok_load ? "ok" : "FAILED");
 	const bool ok_use = hooks.SetHook(kHookUseItemOntoItem, &Hook_UPrimalItem_UseItemOntoItem, &UPrimalItem_UseItemOntoItem_original);
 	Log::GetLog()->info("Hook (item skin apply guard): UseItemOntoItem {}", ok_use ? "ok" : "FAILED");
-	Log::GetLog()->info("Hooks (item entry probe): AddItem {}, NotifyItemAdded {}, InitFromNetInfo {}, AddNewItem {}", ok_add ? "ok" : "FAILED",
-		ok_notify ? "ok" : "FAILED", ok_init ? "ok" : "FAILED", ok_new ? "ok" : "FAILED");
+	Log::GetLog()->info("Hook (item entry): InitFromNetInfo {}", ok_init ? "ok" : "FAILED");
 
 	AddBoth<&RunReload>(kReloadCommand);
 	AddBoth<&RunScan>(kScanCommand);
@@ -2672,11 +2580,7 @@ extern "C" __declspec(dllexport) void Plugin_Unload()
 	hooks.DisableHook(kHookCharacterPreRep, &Hook_AShooterCharacter_PreReplication);
 	hooks.DisableHook(kHookSkinMessage, &Hook_APrimalStructure_MultiHandleSkinNetMessage);
 	hooks.DisableHook(kSetSkinSymbol, &Hook_APrimalStructure_SetStructureSkin);
-	hooks.DisableHook(kHookSkinRefresh, &Hook_APrimalStructure_MultiRefreshStructureSkin);
-	hooks.DisableHook(kHookAddItem, &Hook_UPrimalInventoryComponent_AddItem);
-	hooks.DisableHook(kHookNotifyItemAdded, &Hook_UPrimalInventoryComponent_NotifyItemAdded);
 	hooks.DisableHook(kHookInitFromNetInfo, &Hook_UPrimalItem_InitFromNetInfo);
-	hooks.DisableHook(kHookAddNewItem, &Hook_UPrimalItem_AddNewItem);
 	hooks.DisableHook(kHookLoadedFromSave, &Hook_UPrimalItem_InventoryLoadedFromSaveGame);
 	hooks.DisableHook(kHookUseItemOntoItem, &Hook_UPrimalItem_UseItemOntoItem);
 	if (g_channel_hook)

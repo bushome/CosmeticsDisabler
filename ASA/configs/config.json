@@ -25,6 +25,7 @@
   "FilterItemCustomData": false,
   "FilterItems": false,
   "HideSkinsCommand": "/hideskins",
+  "LogProbeSummary": false,
   "MaxDetailLinesPerSummary": 50,
   "PlayerStripCooldown_Minutes": 30,
   "ProbeClientRpcs": false,

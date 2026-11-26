@@ -68,7 +68,8 @@ namespace CosmeticsProbe
 		std::vector<int> block_skins_for_platforms = {3, 4, 5}; // connection platform values that get no skins (3 Series X, 4 Series S, 5 PS5)
 		bool block_skins_for_unknown_platforms = true;          // platform values that are not 1, 3, 4 or 5 (2, 6, others, unread) get no skins either
 		std::vector<std::string> treat_as_console_players; // testing: EOS IDs whose connection counts as a console
-		int summary_interval_seconds = 30;       // how often the counters are written to the log
+		bool log_probe_summary = false;          // write probe totals at the end of each window
+		int summary_interval_seconds = 30;       // how often the counters and detail budget reset
 		int max_detail_lines_per_summary = 50;   // cap on individual "seen one" log lines per summary window
 		int scan_actors_per_tick = 20000;        // actors looked at per timer tick by Scan / Strip
 		int defer_structure_skins_seconds = 0;  // EXPERIMENTAL: PC connections get skinned structures plain, released after this delay (0 = off)
@@ -224,6 +225,7 @@ namespace CosmeticsProbe
 			}
 		}
 		s.block_skins_for_unknown_platforms = detail::ReadBool(root, "BlockSkinsForUnknownPlatforms", s.block_skins_for_unknown_platforms);
+		s.log_probe_summary = detail::ReadBool(root, "LogProbeSummary", s.log_probe_summary);
 		s.summary_interval_seconds = detail::ReadInt(root, "SummaryInterval_Seconds", s.summary_interval_seconds, 5, 3600);
 		s.max_detail_lines_per_summary = detail::ReadInt(root, "MaxDetailLinesPerSummary", s.max_detail_lines_per_summary, 0, 1000);
 		s.scan_actors_per_tick = detail::ReadInt(root, "ScanActorsPerTick", s.scan_actors_per_tick, 100, 1000000);
@@ -850,10 +852,8 @@ namespace CosmeticsProbe
 		long long character_with_cosmetic = 0;//   ... where a hair/eyebrow/facial hair mod id was set
 		long long skin_messages = 0;          // APrimalStructure.MultiHandleSkinNetMessage calls
 		long long skin_sets = 0;              // APrimalStructure.SetStructureSkin calls (every call, blocked or not)
-		long long skin_refreshes = 0;         // APrimalStructure.MultiRefreshStructureSkin multicast calls
 		long long skin_rpc_withheld = 0;      // skin change multicasts not sent to a console connection
 		KeyCounter set_skin_classes;          // skin classes passed to SetStructureSkin
-		KeyCounter refresh_skin_classes;      // skin classes passed to MultiRefreshStructureSkin
 		KeyCounter skin_classes;              // item skin class names seen going to clients
 		KeyCounter mod_ids;                   // cosmetic mod ids seen (items, characters)
 		KeyCounter platforms;                 // GetCrossplayPlatform() of characters carrying a cosmetic
@@ -896,7 +896,6 @@ namespace CosmeticsProbe
 		out += "  structure skin messages: " + std::to_string(c.skin_messages) + ", names: " + c.message_names.Format(6)
 			+ ", structures: " + c.message_structures.Format(6);
 		out += "\n  structure skin sets: " + std::to_string(c.skin_sets) + " " + c.set_skin_classes.Format(6)
-			+ ", skin refresh multicasts: " + std::to_string(c.skin_refreshes) + " " + c.refresh_skin_classes.Format(6)
 			+ ", withheld from consoles: " + std::to_string(c.skin_rpc_withheld);
 		out += "\n  filtered: items " + std::to_string(c.items_filtered) + " (custom data cleared " + std::to_string(c.items_custom_data_cleared)
 			+ "), structure skin applications blocked " + std::to_string(c.skin_applies_blocked) + ": " + c.blocked_skin_classes.Format(6);

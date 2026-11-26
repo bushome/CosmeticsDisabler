@@ -29,13 +29,14 @@ and plugin loadout, with a PC client and, if you can, a console client connected
 | `UPrimalItem.GetItemNetInfo(bool)` (only when building data for a client) | items sent, items carrying a skin class, a mod cosmetic id or custom item data; skin class names; mod ids |
 | `AShooterCharacter.PreReplication` | characters carrying a hair / eyebrow / facial hair mod cosmetic id (only positive ids count; -1 and 0 mean none), plus every character's platform: the crossplay platform (`Windows`, `XSX`, `PS5`, `Unknown`) and the connection platform byte (1 PC, 3 Xbox Series X, 4 Xbox Series S, 5 PS5 as measured on a test server, 2 / 6 unconfirmed) |
 | `APrimalStructure.MultiHandleSkinNetMessage` | structure skin messages (the multicast that pushes a skin change), message names, structure classes |
-| `UPrimalInventoryComponent.AddItem`, `NotifyItemAdded`, `UPrimalItem.InitFromNetInfo`, `AddNewItem` (with `ProbeItemEntry`) | how many items entering inventories carry a skin, and which of those the item strip removed |
+| `UPrimalItem.InitFromNetInfo` (with `ProbeItemEntry` or `StripItemsOnEntry`) | how many incoming items carry a skin, and how many had it removed |
 | `UActorChannel.ReplicateActor()` (with `ProbeStructureChannels`) | skinned structures sent to each connection, by connection platform; distinct connection/structure pairs; time spent in the call |
 | `UPrimalItem.InventoryLoadedFromSaveGame` (with `ProbeItemEntry` or `StripSavedItems`) | items loaded from the save with a skin, their owner class and team, and how many were stripped |
 
-Each row needs its `Probe...` switch on (all off by default); they are for test servers and troubleshooting. A summary
-is written to the plugin log every `SummaryInterval_Seconds`; up to `MaxDetailLinesPerSummary` individual lines per
-window show examples.
+Enable the `Probe...` switches you need for troubleshooting. `LogProbeSummary` is off by default. Turn it
+on to write a summary every `SummaryInterval_Seconds`. The interval also resets the counters and the
+`MaxDetailLinesPerSummary` budget for individual probe lines. `CosmeticsDisabler.Status` can still write
+the current counters to the log on demand.
 
 ## Item skins: where they are removed
 
@@ -95,7 +96,8 @@ A command refused because `EnableStrip` is false says so in the reply and writes
 | `ProbeItemRequests` | `false` | log who asks for which items (platform of the viewer, equipped gear or not, skinned item count) and count skinned items built outside any request; hooks `UPrimalInventoryComponent::ServerRequestItems`; probe only, changes nothing. Test servers only |
 | `TreatAsConsolePlayers` | `[]` | testing only: EOS IDs whose connection is handled as a console whatever platform it reports, so the console path can be tested from a PC; leave empty on live |
 | `ReadConnectionPlatform` | `true` | read `UNetConnection::ConnectionPlatform` for each player; turn off if it ever misbehaves |
-| `SummaryInterval_Seconds` | `30` | seconds between summaries (5 - 3600) |
+| `LogProbeSummary` | `false` | write a periodic probe summary to the log |
+| `SummaryInterval_Seconds` | `30` | seconds per counter and detail budget window (5 - 3600). Also the log interval when `LogProbeSummary` is on |
 | `MaxDetailLinesPerSummary` | `50` | cap on example lines per summary (0 - 1000) |
 | `ScanActorsPerTick` | `20000` | actors Scan / Strip check per second (100 - 1000000) |
 | `EnableStrip` | `false` | master switch for `Strip confirm`, `StripTribe confirm`, `Restore` and `StripOnMapLoad`; not needed for `/stripskins` |
@@ -210,7 +212,7 @@ On a first install:
 1. The startup log shows `CosmeticsDisabler 0.6.0 loaded` and `Hooks: ... ok` for every hook (see Troubleshooting if one
    says `FAILED`).
 2. A console player near skinned structures sees them plain, and a PC player sees the skins. To see it in the log,
-   switch `ProbeStructureChannels` on for a while: its summary line shows `blanked for console` above 0 while a console
+   switch `ProbeStructureChannels` and `LogProbeSummary` on for a while. The summary line shows `blanked for console` above 0 while a console
    player is near skinned structures. Switch it off again afterwards.
 3. Before any strip, run `CosmeticsDisabler.Scan` and check the official/custom counts look right and the
    `HasAppliedCustomCosmetic check` line shows 0 mismatches.

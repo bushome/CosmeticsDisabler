@@ -150,6 +150,7 @@ static void TestSettings()
 	}
 	CHECK(GroupOfPlatform(0) == PlatformGroup::Unknown && GroupOfPlatform(6) == PlatformGroup::Unknown && GroupOfPlatform(-1) == PlatformGroup::Unknown);
 	CHECK(d.read_connection_platform);
+	CHECK(!d.log_probe_summary);
 	CHECK(d.summary_interval_seconds == 30);
 	CHECK(d.max_detail_lines_per_summary == 50);
 	CHECK(d.scan_actors_per_tick == 20000);
@@ -161,9 +162,10 @@ static void TestSettings()
 	CHECK(d.strip_on_map_load_delay_seconds == 120 && d.strip_repeat_minutes == 0);
 	CHECK(d.block_skin_apply_message.empty());
 
-	const Settings s = ParseSettings(Parse(R"({"ProbeItems": true, "SummaryInterval_Seconds": 60, // comment
+	const Settings s = ParseSettings(Parse(R"({"ProbeItems": true, "LogProbeSummary": true, "SummaryInterval_Seconds": 60, // comment
 		"MaxDetailLinesPerSummary": 0, "Unknown": 1})"));
 	CHECK(s.probe_items && !s.probe_players);
+	CHECK(s.log_probe_summary);
 	CHECK(s.summary_interval_seconds == 60);
 	CHECK(s.max_detail_lines_per_summary == 0);
 
@@ -171,6 +173,7 @@ static void TestSettings()
 	CHECK(Throws([] { ParseSettings(Parse(R"({"ReadConnectionPlatform": 1})")); }));
 	CHECK(Throws([] { ParseSettings(Parse("[]")); }));
 	CHECK(Throws([] { ParseSettings(Parse(R"({"ProbeItems": "yes"})")); }));
+	CHECK(Throws([] { ParseSettings(Parse(R"({"LogProbeSummary": "yes"})")); }));
 	CHECK(Throws([] { ParseSettings(Parse(R"({"SummaryInterval_Seconds": 1})")); }));
 	CHECK(Throws([] { ParseSettings(Parse(R"({"SummaryInterval_Seconds": 30.5})")); }));
 	CHECK(Throws([] { ParseSettings(Parse(R"({"ScanActorsPerTick": 99})")); }));
@@ -548,6 +551,7 @@ static void CheckShipped(const Settings& s)
 	CHECK(s.unequip_skin_items_for_consoles);
 	CHECK(s.treat_as_console_players.empty());
 	CHECK(s.read_connection_platform);
+	CHECK(!s.log_probe_summary);
 	CHECK(s.summary_interval_seconds == 30);
 	CHECK(s.max_detail_lines_per_summary == 50);
 	CHECK(s.scan_actors_per_tick == 20000);

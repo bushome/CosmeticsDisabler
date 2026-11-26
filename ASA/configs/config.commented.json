@@ -106,8 +106,8 @@
   // RPC send (ProcessRemoteFunctionForChannelPrivate). Count only: nothing is changed. Test servers only.
   "ProbeClientRpcs": false,
 
-  // Log skinned items as they enter an inventory (restored from saved data, spawned, moved), with a count of how often
-  // each game function fired. Count and log only: nothing is changed. Used to find out which paths skinned items take.
+  // Log skinned items initialized from incoming data or loaded from a save. The report also counts skins removed
+  // by StripItemsOnEntry and StripSavedItems when those settings are enabled.
   "ProbeItemEntry": false,
 
   // Log which player asks for which items (hooks UPrimalInventoryComponent::ServerRequestItems): the viewer's platform,
@@ -188,7 +188,10 @@
   // data once a save is written, so test it on a test server first and keep a backup of the save.
   "StripSavedItems": false,
 
-  // How often the counters are written to the plugin log (5 - 3600).
+  // Write the periodic probe summary to the log. Status can still show current counters on demand.
+  "LogProbeSummary": false,
+
+  // Seconds between counter and detail-budget resets (5 - 3600). Also the log interval when enabled.
   "SummaryInterval_Seconds": 30,
 
   // Testing only: EOS IDs of players whose connection is handled as a console, whatever platform it reports, so
