@@ -1,7 +1,7 @@
 {
   "FullName": "CosmeticsDisabler",
   "Description": "Keeps applied cosmetics from reaching clients: backed-up structure and item skin strips, an apply guard and an item data filter (off until enabled), plus probe logging",
-  "Version": 0.6.1,
+  "Version": 0.61,
   "MinApiVersion": 2.1,
   "Dependencies": []
 }
