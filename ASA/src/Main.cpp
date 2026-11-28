@@ -93,6 +93,7 @@ namespace
 	const char* const kSetSkinSymbol = "APrimalStructure.SetStructureSkin(TSubclassOf<APrimalStructure>,__int64,int)";
 
 	Settings g_settings;
+	detail::PlatformBlockLookup g_platform_blocks{ g_settings };
 	bool g_alive = false;
 	long long g_clock = 0;
 	Counters g_counters;
@@ -499,11 +500,17 @@ namespace
 
 	std::string g_config_error;   // set while running on SafeFallbackSettings (config.json could not be read at load)
 
+	void ApplySettings(Settings settings)
+	{
+		g_platform_blocks = detail::PlatformBlockLookup(settings);
+		g_settings = std::move(settings);
+	}
+
 	bool ReloadSettings(std::string& error)
 	{
 		try
 		{
-			g_settings = LoadSettings();
+			ApplySettings(LoadSettings());
 			if (!g_config_error.empty())
 				Log::GetLog()->info("config.json loaded again; the fallback settings are no longer used");
 			g_config_error.clear();
@@ -1919,7 +1926,7 @@ namespace
 			if (eos_id.empty())
 				return info;
 			info.opted_in = g_settings.enable_player_hide_commands && g_optin.Contains(eos_id);
-			info.test_console = IsTreatedAsConsole(g_settings, g_optin, eos_id);
+			info.test_console = info.opted_in || IsTreatedAsConsole(g_settings, eos_id);
 			if (info.test_console)
 				Log::GetLog()->info("{}: {} (connection platform {}) is handled as a console player",
 					info.opted_in ? "/hideskins" : "TreatAsConsolePlayers", eos_id, ConnectionPlatformLabel(info.platform));
@@ -1949,9 +1956,9 @@ void Hook_AShooterPlayerController_ClientAddActorItem(AShooterPlayerController* 
 			std::string viewer = "no connection";
 			if (connection != nullptr)
 			{
-				const ConnectionInfo ci = InfoFor(connection);
-				viewer = ConnectionLabel(ci);
-				console = IsBlockedPlatform(g_settings, ci.platform, ci.test_console);
+				const ConnectionInfo viewer_info = InfoFor(connection);
+				viewer = ConnectionLabel(viewer_info);
+				console = g_platform_blocks.IsBlocked(viewer_info.platform, viewer_info.test_console);
 			}
 			const long long net_mod_id = NetModSkinId(&info);
 			if (console && (info.ItemSkinTemplateField().uClass != nullptr || net_mod_id != 0))
@@ -2039,7 +2046,7 @@ void Hook_UPrimalInventoryComponent_ServerRequestItems(UPrimalInventoryComponent
 			{
 				const ConnectionInfo info = InfoFor(connection);
 				viewer = ConnectionLabel(info);
-				console = IsBlockedPlatform(g_settings, info.platform, info.test_console);
+				console = g_platform_blocks.IsBlocked(info.platform, info.test_console);
 			}
 			else
 				viewer = "no connection";
@@ -2193,32 +2200,32 @@ __int64 Hook_UActorChannel_ReplicateActor(UActorChannel* channel)
 				}
 				if (is_weapon)
 				{
-					FItemNetInfo* winfo = &static_cast<AShooterWeapon*>(actor)->AssociatedItemNetInfoField();
-					UClass* wskin = winfo->ItemSkinTemplateField().uClass;
-					const long long wmod = NetModSkinId(winfo);
-					if (wskin != nullptr || wmod != 0)
+					FItemNetInfo* held_item_info = &static_cast<AShooterWeapon*>(actor)->AssociatedItemNetInfoField();
+					UClass* held_skin_class = held_item_info->ItemSkinTemplateField().uClass;
+					const long long held_mod_id = NetModSkinId(held_item_info);
+					if (held_skin_class != nullptr || held_mod_id != 0)
 					{
 						UNetConnection* connection = ReadAt<UNetConnection*>(channel, g_off_channel_connection);
-						ConnectionInfo winfo_conn;
+						ConnectionInfo viewer_info;
 						if (connection != nullptr)
-							winfo_conn = InfoFor(connection);
-						if (IsBlockedPlatform(g_settings, winfo_conn.platform, winfo_conn.test_console))
+							viewer_info = InfoFor(connection);
+						if (g_platform_blocks.IsBlocked(viewer_info.platform, viewer_info.test_console))
 						{
-							weapon_info = winfo;
-							weapon_saved_skin = wskin;
-							weapon_saved_mod = wmod;
-							weapon_saved_variant = NetModSkinVariant(winfo);
-							winfo->ItemSkinTemplateField().uClass = nullptr;
-							NetModSkinId(winfo) = 0;
-							NetModSkinVariant(winfo) = 0;
+							weapon_info = held_item_info;
+							weapon_saved_skin = held_skin_class;
+							weapon_saved_mod = held_mod_id;
+							weapon_saved_variant = NetModSkinVariant(held_item_info);
+							held_item_info->ItemSkinTemplateField().uClass = nullptr;
+							NetModSkinId(held_item_info) = 0;
+							NetModSkinVariant(held_item_info) = 0;
 							++g_counters.weapon_skins_blanked_for_console;
-							const unsigned long long wkey = (static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(connection)) * 1000003ULL)
+							const unsigned long long weapon_viewer_key = (static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(connection)) * 1000003ULL)
 								^ static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(actor));
 							if (g_weapon_logged.size() > 4096)
 								g_weapon_logged.clear();
-							if (g_weapon_logged.insert(wkey).second && g_budget.Take())
-								Log::GetLog()->info("held weapon: {} skin={} mod={} blanked for {}", ClassNameOfObject(actor), ClassName(wskin), wmod,
-									ConnectionLabel(winfo_conn));
+							if (g_weapon_logged.insert(weapon_viewer_key).second && g_budget.Take())
+								Log::GetLog()->info("held weapon: {} skin={} mod={} blanked for {}", ClassNameOfObject(actor), ClassName(held_skin_class),
+									held_mod_id, ConnectionLabel(viewer_info));
 						}
 					}
 				}
@@ -2242,7 +2249,7 @@ __int64 Hook_UActorChannel_ReplicateActor(UActorChannel* channel)
 						info = InfoFor(connection);
 					pair_connection = reinterpret_cast<uintptr_t>(connection);
 					pair_actor = reinterpret_cast<uintptr_t>(actor);
-					const bool is_console = IsBlockedPlatform(g_settings, info.platform, info.test_console);
+					const bool is_console = g_platform_blocks.IsBlocked(info.platform, info.test_console);
 					bool defer = false;
 					if (!is_console && g_settings.defer_structure_skins_seconds > 0 && connection != nullptr)
 					{
@@ -2360,7 +2367,7 @@ void Hook_UNetDriver_ProcessRemoteFunctionForChannelPrivate(void* driver, UActor
 		if (!name.empty())
 		{
 			const ConnectionInfo info = InfoFor(connection);
-			if (IsBlockedPlatform(g_settings, info.platform, info.test_console))
+			if (g_platform_blocks.IsBlocked(info.platform, info.test_console))
 				g_counters.console_rpcs.Add(name + " on " + ClassNameOfObject(target));
 		}
 	}
@@ -2368,7 +2375,7 @@ void Hook_UNetDriver_ProcessRemoteFunctionForChannelPrivate(void* driver, UActor
 		&& std::this_thread::get_id() == g_game_thread && IsSkinMulticast(function))
 	{
 		const ConnectionInfo info = InfoFor(connection);
-		if (IsBlockedPlatform(g_settings, info.platform, info.test_console))
+		if (g_platform_blocks.IsBlocked(info.platform, info.test_console))
 		{
 			++g_counters.skin_rpc_withheld;
 			if (g_budget.Take())
@@ -2492,7 +2499,7 @@ extern "C" __declspec(dllexport) void Plugin_Init()
 	std::string error;
 	if (!ReloadSettings(error))
 	{
-		g_settings = SafeFallbackSettings();
+		ApplySettings(SafeFallbackSettings());
 		g_config_error = error;
 		Log::GetLog()->error("************************************************************************");
 		Log::GetLog()->error("CONFIG NOT LOADED: {}", error);

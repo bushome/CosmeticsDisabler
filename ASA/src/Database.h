@@ -26,11 +26,6 @@ namespace CosmeticsDb
 		bool ssl = false; // false: plain connection (local / LAN MariaDB without TLS)
 	};
 
-	inline bool SameDb(const DbConfig& a, const DbConfig& b)
-	{
-		return a.host == b.host && a.port == b.port && a.user == b.user && a.password == b.password && a.database == b.database && a.ssl == b.ssl;
-	}
-
 	using DbRow = std::vector<std::optional<std::string>>;
 
 	class Db
@@ -303,7 +298,7 @@ namespace CosmeticsDb
 			for (auto& fn : local)
 			{
 				try { fn(); }
-				catch (...) {}
+				catch (...) { continue; }
 			}
 		}
 

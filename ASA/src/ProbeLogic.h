@@ -8,6 +8,7 @@
 // See tests/logic_tests.cpp.
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
@@ -127,6 +128,12 @@ namespace CosmeticsProbe
 
 	namespace detail
 	{
+		inline bool EqualsIgnoringCase(const std::string& left, const std::string& right)
+		{
+			return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin(),
+				[](unsigned char a, unsigned char b) { return a == b || std::tolower(a) == std::tolower(b); });
+		}
+
 		inline bool ReadBool(const nlohmann::json& root, const char* key, bool fallback)
 		{
 			if (!root.contains(key))
@@ -364,9 +371,8 @@ namespace CosmeticsProbe
 
 	inline bool IsAllowed(const Settings& s, const std::string& skin_class_name)
 	{
-		const std::string wanted = ToLower(skin_class_name);
 		for (const std::string& name : s.allow_skin_classes)
-			if (ToLower(name) == wanted)
+			if (detail::EqualsIgnoringCase(name, skin_class_name))
 				return true;
 		return false;
 	}
@@ -646,9 +652,8 @@ namespace CosmeticsProbe
 	{
 		if (eos_id.empty())
 			return false;
-		const std::string wanted = ToLower(eos_id);
 		for (const std::string& id : s.treat_as_console_players)
-			if (ToLower(id) == wanted)
+			if (detail::EqualsIgnoringCase(id, eos_id))
 				return true;
 		return false;
 	}
@@ -819,6 +824,31 @@ namespace CosmeticsProbe
 		if (platform == 1 || platform == 3 || platform == 4 || platform == 5)
 			return false;
 		return s.block_skins_for_unknown_platforms;
+	}
+
+	namespace detail
+	{
+		// ConnectionPlatform is a byte. Negative or unread values use the unknown-platform policy.
+		class PlatformBlockLookup
+		{
+		public:
+			explicit PlatformBlockLookup(const Settings& settings)
+				: block_unknown_(IsBlockedPlatform(settings, -1, false))
+			{
+				for (size_t index = 0; index < blocked_.size(); ++index)
+					blocked_[index] = IsBlockedPlatform(settings, static_cast<int>(index), false);
+			}
+
+			bool IsBlocked(int platform, bool treated_as_console) const
+			{
+				const auto index = static_cast<unsigned int>(platform);
+				return treated_as_console || (index < blocked_.size() ? blocked_[index] : block_unknown_);
+			}
+
+		private:
+			std::array<bool, 256> blocked_{};
+			bool block_unknown_;
+		};
 	}
 
 	inline std::string ConnectionPlatformLabel(int platform)
